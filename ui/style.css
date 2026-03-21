@@ -1,0 +1,647 @@
+/* ─────────────────────────────────────────
+   FONTS
+───────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+/* ─────────────────────────────────────────
+   CSS VARIABLES — change these to retheme
+───────────────────────────────────────── */
+:root {
+    --bg-base:        #080b12;
+    --bg-surface:     #0d1117;
+    --bg-card:        rgba(255, 255, 255, 0.04);
+    --bg-card-hover:  rgba(255, 255, 255, 0.07);
+    --border-glass:   rgba(255, 255, 255, 0.08);
+    --border-active:  rgba(0, 198, 255, 0.5);
+    --accent-cyan:    #00c6ff;
+    --accent-purple:  #7f5af0;
+    --accent-green:   #2cb67d;
+    --accent-red:     #ff4d6d;
+    --text-primary:   #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted:     #484f58;
+    --glow-cyan:      0 0 20px rgba(0, 198, 255, 0.15);
+    --glow-purple:    0 0 20px rgba(127, 90, 240, 0.15);
+    --radius-sm:      8px;
+    --radius-md:      14px;
+    --radius-lg:      20px;
+}
+
+/* ─────────────────────────────────────────
+   BASE
+───────────────────────────────────────── */
+html, body, [data-testid="stAppViewContainer"] {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-base) !important;
+    color: var(--text-primary);
+}
+
+/* Animated gradient orbs in background — subtle depth effect */
+[data-testid="stAppViewContainer"]::before {
+    content: '';
+    position: fixed;
+    top: -200px;
+    left: -200px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(0, 198, 255, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+[data-testid="stAppViewContainer"]::after {
+    content: '';
+    position: fixed;
+    bottom: -200px;
+    right: -100px;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(127, 90, 240, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+[data-testid="stMain"] {
+    background: transparent !important;
+}
+
+/* ─────────────────────────────────────────
+   SIDEBAR
+───────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: rgba(13, 17, 23, 0.95) !important;
+    border-right: 1px solid var(--border-glass) !important;
+    backdrop-filter: blur(20px);
+}
+
+[data-testid="stSidebar"] > div {
+    padding-top: 0 !important;
+}
+
+/* ── Branded Header ── */
+/* Replaces the plain markdown heading with a styled banner */
+[data-testid="stSidebar"]::before {
+    content: "📊  AI Financial Analyst";
+    display: block;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--accent-cyan);
+    padding: 20px 20px 16px 20px;
+    border-bottom: 1px solid rgba(0, 198, 255, 0.15);
+    margin-bottom: 4px;
+    background: linear-gradient(180deg,
+        rgba(0, 198, 255, 0.06) 0%,
+        transparent 100%
+    );
+}
+
+/* ── Hide the "## ⚙️ Controls" markdown heading — CSS handles it now ── */
+[data-testid="stSidebar"] h2 {
+    display: none !important;
+}
+
+/* ── Section divider labels ── */
+/* Targets all label text — uppercase, spaced, dimmed */
+[data-testid="stSidebar"] label {
+    color: var(--text-secondary) !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+}
+
+/* ── Search input ── */
+[data-testid="stSidebar"] [data-testid="stTextInput"] input {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.9rem !important;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+[data-testid="stSidebar"] [data-testid="stTextInput"] input:focus {
+    border-color: var(--accent-cyan) !important;
+    box-shadow: var(--glow-cyan) !important;
+    outline: none !important;
+}
+
+/* ── Selectbox ── */
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    transition: border-color 0.2s;
+}
+
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div:hover {
+    border-color: rgba(0, 198, 255, 0.35) !important;
+}
+
+/* ── Sidebar info/warning/success alert boxes ── */
+[data-testid="stSidebar"] [data-testid="stAlert"] {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-sm) !important;
+    font-size: 0.8rem;
+}
+
+/* ── Checkbox card ── */
+/* Wraps the checkbox in a subtle bordered card */
+[data-testid="stSidebar"] [data-testid="stCheckbox"] {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin-top: 6px;
+    transition: border-color 0.2s;
+}
+
+[data-testid="stSidebar"] [data-testid="stCheckbox"]:hover {
+    border-color: rgba(0, 198, 255, 0.25);
+}
+
+/* ── Date inputs (shown when custom range is on) ── */
+[data-testid="stSidebar"] [data-testid="stDateInput"] input {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    font-size: 0.85rem !important;
+}
+
+/* ── Sidebar bottom branding ── */
+[data-testid="stSidebarContent"]::after {
+    content: "Built with ❤ using Streamlit";
+    display: block;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px 0 16px 0;
+    margin-top: 40px;
+    border-top: 1px solid var(--border-glass);
+    letter-spacing: 0.04em;
+}
+
+/* ─────────────────────────────────────────
+   NAVBAR
+───────────────────────────────────────── */
+.navbar {
+    padding: 18px 28px;
+    background: rgba(13, 17, 23, 0.8);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-lg);
+    margin-bottom: 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Animated top border glow */
+.navbar::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        var(--accent-cyan) 30%,
+        var(--accent-purple) 70%,
+        transparent 100%
+    );
+}
+
+.nav-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+}
+
+.nav-items {
+    display: flex;
+    gap: 24px;
+}
+
+.nav-items span {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.2s;
+    letter-spacing: 0.02em;
+}
+
+.nav-items span:hover {
+    color: var(--accent-cyan);
+}
+
+/* ─────────────────────────────────────────
+   STOCK HEADER
+───────────────────────────────────────── */
+.stock-header {
+    padding: 20px 24px;
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-md);
+    margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.stock-header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent-cyan), transparent);
+}
+
+.stock-header:hover {
+    border-color: rgba(0, 198, 255, 0.2);
+    box-shadow: var(--glow-cyan);
+}
+
+.stock-header h2 {
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+    color: var(--text-primary) !important;
+    margin: 0 0 6px 0 !important;
+    letter-spacing: -0.02em;
+}
+
+.price {
+    font-size: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--accent-cyan);
+}
+
+/* ─────────────────────────────────────────
+   TABS
+───────────────────────────────────────── */
+/* Tab bar background */
+[data-testid="stTabs"] [role="tablist"] {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 4px !important;
+    border: 1px solid var(--border-glass) !important;
+    gap: 2px !important;
+}
+
+/* Individual tab button */
+[data-testid="stTabs"] button[role="tab"] {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 8px 16px !important;
+    transition: all 0.2s !important;
+    border: none !important;
+    background: transparent !important;
+}
+
+[data-testid="stTabs"] button[role="tab"]:hover {
+    color: var(--text-primary) !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Active tab */
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    color: var(--accent-cyan) !important;
+    background: rgba(0, 198, 255, 0.08) !important;
+    box-shadow: 0 0 12px rgba(0, 198, 255, 0.1) !important;
+}
+
+/* Remove default underline indicator */
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"]::after {
+    display: none !important;
+}
+
+/* Tab content area */
+[data-testid="stTabsContent"] {
+    padding-top: 20px !important;
+}
+
+/* ─────────────────────────────────────────
+   METRIC CARDS
+───────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: var(--bg-card) !important;
+    backdrop-filter: blur(16px) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 20px !important;
+    transition: all 0.25s ease !important;
+    position: relative;
+    overflow: hidden;
+}
+
+[data-testid="stMetric"]::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+    opacity: 0;
+    transition: opacity 0.25s;
+}
+
+[data-testid="stMetric"]:hover {
+    border-color: rgba(0, 198, 255, 0.25) !important;
+    box-shadow: var(--glow-cyan) !important;
+    transform: translateY(-2px);
+}
+
+[data-testid="stMetric"]:hover::before {
+    opacity: 1;
+}
+
+[data-testid="stMetricLabel"] {
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    color: var(--text-secondary) !important;
+}
+
+[data-testid="stMetricValue"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 1.6rem !important;
+    font-weight: 600 !important;
+    color: var(--text-primary) !important;
+}
+
+/* ─────────────────────────────────────────
+   BUTTONS
+───────────────────────────────────────── */
+[data-testid="stButton"] button,
+[data-testid="stDownloadButton"] button {
+    background: rgba(0, 198, 255, 0.08) !important;
+    border: 1px solid rgba(0, 198, 255, 0.25) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--accent-cyan) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+    transition: all 0.2s ease !important;
+    letter-spacing: 0.02em;
+}
+
+[data-testid="stButton"] button:hover,
+[data-testid="stDownloadButton"] button:hover {
+    background: rgba(0, 198, 255, 0.15) !important;
+    border-color: var(--accent-cyan) !important;
+    box-shadow: var(--glow-cyan) !important;
+    transform: translateY(-1px);
+}
+
+/* Danger/remove buttons (❌ prefix) */
+[data-testid="stButton"] button[kind="secondary"] {
+    background: rgba(255, 77, 109, 0.08) !important;
+    border-color: rgba(255, 77, 109, 0.25) !important;
+    color: var(--accent-red) !important;
+}
+
+/* ─────────────────────────────────────────
+   SLIDERS
+───────────────────────────────────────── */
+[data-testid="stSlider"] [role="slider"] {
+    background: var(--accent-cyan) !important;
+    box-shadow: 0 0 8px rgba(0, 198, 255, 0.5) !important;
+}
+
+[data-testid="stSlider"] [data-testid="stSliderTrack"] > div:first-child {
+    background: var(--border-glass) !important;
+}
+
+[data-testid="stSlider"] [data-testid="stSliderTrack"] > div:last-child {
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple)) !important;
+}
+
+[data-testid="stSlider"] label {
+    color: var(--text-secondary) !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+}
+
+/* ─────────────────────────────────────────
+   ALERTS & INFO BOXES
+───────────────────────────────────────── */
+[data-testid="stAlert"] {
+    border-radius: var(--radius-sm) !important;
+    border: 1px solid var(--border-glass) !important;
+    font-size: 0.85rem !important;
+}
+
+[data-testid="stAlert"][data-baseweb="notification"] {
+    background: rgba(0, 198, 255, 0.06) !important;
+    border-color: rgba(0, 198, 255, 0.2) !important;
+}
+
+/* ─────────────────────────────────────────
+   DATAFRAME / TABLE
+───────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    overflow: hidden;
+}
+
+[data-testid="stDataFrame"] thead th {
+    background: rgba(0, 198, 255, 0.08) !important;
+    color: var(--accent-cyan) !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    border-bottom: 1px solid var(--border-glass) !important;
+}
+
+[data-testid="stDataFrame"] tbody tr:hover td {
+    background: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* ─────────────────────────────────────────
+   EXPANDER
+───────────────────────────────────────── */
+[data-testid="stExpander"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    overflow: hidden;
+}
+
+[data-testid="stExpander"] summary {
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.88rem !important;
+    padding: 12px 16px !important;
+}
+
+[data-testid="stExpander"] summary:hover {
+    color: var(--text-primary) !important;
+}
+
+/* ─────────────────────────────────────────
+   CHAT INTERFACE
+───────────────────────────────────────── */
+[data-testid="stChatMessage"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 16px !important;
+    margin-bottom: 8px !important;
+    backdrop-filter: blur(8px);
+}
+
+[data-testid="stChatInput"] textarea {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    color: var(--text-primary) !important;
+    font-family: 'Inter', sans-serif !important;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+[data-testid="stChatInput"] textarea:focus {
+    border-color: var(--accent-cyan) !important;
+    box-shadow: var(--glow-cyan) !important;
+}
+
+/* ─────────────────────────────────────────
+   SPINNER
+───────────────────────────────────────── */
+[data-testid="stSpinner"] {
+    color: var(--accent-cyan) !important;
+}
+
+/* ─────────────────────────────────────────
+   SUBHEADERS & TEXT
+───────────────────────────────────────── */
+h1, h2, h3 {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+    color: var(--text-primary) !important;
+}
+
+[data-testid="stMarkdown"] h3 {
+    font-size: 1.1rem !important;
+    color: var(--text-primary) !important;
+    border-bottom: 1px solid var(--border-glass);
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+
+/* Caption text */
+[data-testid="stCaptionContainer"] {
+    color: var(--text-muted) !important;
+    font-size: 0.78rem !important;
+}
+
+/* Dividers */
+hr {
+    border-color: var(--border-glass) !important;
+    margin: 20px 0 !important;
+}
+
+/* ─────────────────────────────────────────
+   SCROLLBAR
+───────────────────────────────────────── */
+::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-glass);
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 198, 255, 0.3);
+}
+
+/* ─────────────────────────────────────────
+   PLOTLY CHARTS — container styling
+───────────────────────────────────────── */
+[data-testid="stPlotlyChart"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 8px !important;
+    backdrop-filter: blur(8px);
+}
+
+/* ─────────────────────────────────────────
+   SELECT BOX (main area)
+───────────────────────────────────────── */
+[data-testid="stSelectbox"] > div > div {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid var(--border-glass) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    transition: border-color 0.2s;
+}
+
+[data-testid="stSelectbox"] > div > div:hover {
+    border-color: rgba(0, 198, 255, 0.3) !important;
+}
+
+/* ─────────────────────────────────────────
+   CHECKBOX
+───────────────────────────────────────── */
+[data-testid="stCheckbox"] label {
+    color: var(--text-secondary) !important;
+    font-size: 0.85rem !important;
+}
+
+/* ─────────────────────────────────────────
+   SECTION CARD WRAPPER
+   Use class="section-card" in st.markdown
+───────────────────────────────────────── */
+.section-card {
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-md);
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+/* ─────────────────────────────────────────
+   BADGE — for trend/risk labels
+   Usage: <span class="badge green">Uptrend</span>
+───────────────────────────────────────── */
+.badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+.badge.green  { background: rgba(44, 182, 125, 0.15); color: var(--accent-green); border: 1px solid rgba(44, 182, 125, 0.3); }
+.badge.red    { background: rgba(255, 77, 109, 0.15);  color: var(--accent-red);   border: 1px solid rgba(255, 77, 109, 0.3); }
+.badge.cyan   { background: rgba(0, 198, 255, 0.1);    color: var(--accent-cyan);  border: 1px solid rgba(0, 198, 255, 0.25); }
+.badge.purple { background: rgba(127, 90, 240, 0.1);   color: var(--accent-purple);border: 1px solid rgba(127, 90, 240, 0.25); }

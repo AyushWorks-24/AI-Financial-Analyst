@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+yfinance
+plotly
+prophet
+gnews
+langchain-ollama
+langchain-core
+langgraph
+rapidfuzz
+fpdf
+kaleido
