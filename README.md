@@ -1,3 +1,10 @@
+title: AI Financial Analyst
+emoji: 📊
+colorFrom: blue
+colorTo: purple
+sdk: streamlit
+app_file: app.py
+pinned: false
 # 📊 AI Financial Analyst
 
 > An AI-powered real-time stock analysis web application built with Streamlit, LangGraph, Facebook Prophet, and SQLite.
