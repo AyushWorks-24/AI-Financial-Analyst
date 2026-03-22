@@ -401,14 +401,14 @@ with tab5:
                 )
                 st.plotly_chart(fig_dd, use_container_width=True)
 
-                final_market = df_bt["Cumulative_Market"].iloc[-1]
-                final_strategy = df_bt["Cumulative_Strategy"].iloc[-1]
-                max_dd = df_bt["Drawdown"].min()
-
-                col1, col2, col3 = st.columns(3)
-                col1.metric("📈 Buy & Hold Return", f"{(final_market - 1) * 100:.2f}%")
-                col2.metric("🧠 Strategy Return", f"{(final_strategy - 1) * 100:.2f}%")
-                col3.metric("🕳️ Max Drawdown", f"{max_dd * 100:.2f}%")
+                if len(df_bt) > 0:
+                    final_market = df_bt["Cumulative_Market"].iloc[-1]
+                    final_strategy = df_bt["Cumulative_Strategy"].iloc[-1]
+                    max_dd = df_bt["Drawdown"].min()
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("📈 Buy & Hold Return", f"{(final_market - 1) * 100:.2f}%")
+                    col2.metric("🧠 Strategy Return", f"{(final_strategy - 1) * 100:.2f}%")
+                    col3.metric("🕳️ Max Drawdown", f"{max_dd * 100:.2f}%")
 
                 # ── Export backtest results ──
                 bt_export = df_bt[["Cumulative_Market", "Cumulative_Strategy", "Drawdown"]].copy()
