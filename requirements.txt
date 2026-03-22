@@ -1,20 +1,32 @@
-# Install order matters for cloud deployment!
-# pystan must install before prophet otherwise prophet build fails
+# AI Financial Analyst — Python Dependencies
+# Note: streamlit is installed automatically by Hugging Face Spaces
+# All versions compatible with Python 3.10
 
-pystan==3.9.1
-prophet==1.3.0
-streamlit==1.54.0
-yfinance==1.1.0
+# Data fetching
+yfinance==0.2.44
 gnews==0.4.3
-pandas==2.3.3
-numpy==2.4.2
-plotly==6.5.2
-kaleido==1.2.0
-langchain-core==1.2.11
-langchain-groq==1.1.2
-langgraph==1.0.8
-langgraph-checkpoint==4.0.0
-langgraph-prebuilt==1.0.7
-langgraph-sdk==0.3.5
-rapidfuzz==3.14.3
-fpdf2==2.8.7
+
+# Data processing
+numpy==1.26.4
+pandas==2.2.3
+
+# Charts
+plotly==5.24.1
+kaleido==0.2.1
+
+# AI Forecasting
+pystan==3.9.1
+prophet==1.1.6
+
+# AI Agent
+langchain-core==0.3.28
+langchain-groq==0.2.3
+langgraph==0.2.60
+langgraph-checkpoint==2.0.10
+langgraph-prebuilt==0.1.7
+
+# Search
+rapidfuzz==3.10.1
+
+# PDF Export
+fpdf2==2.8.1
