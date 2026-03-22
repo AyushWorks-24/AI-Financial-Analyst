@@ -48,7 +48,17 @@ Built as a **Minor Project** for B.Tech AI & ML at Oriental College of Technolog
 
 ## 🖥️ Screenshots
 
-> *(Add screenshots here after deployment)*
+### 📊 Analysis Tab
+![Analysis](screenshots/analysis.png)
+
+### 📂 Portfolio Tracker
+![Portfolio](screenshots/portfolio.png)
+
+### 🤖 AI Forecast
+![Forecast](screenshots/forecast.png)
+
+### 💬 AI Chat
+![Chat](screenshots/chat.png)
 
 ---
 
