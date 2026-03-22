@@ -1,6 +1,6 @@
 ---
 title: AI Financial Analyst
-emoji: 💹
+emoji: chart
 colorFrom: blue
 colorTo: purple
 sdk: streamlit
