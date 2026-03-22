@@ -1,6 +1,6 @@
 # AI Financial Analyst — Python Dependencies
-# Note: streamlit is installed automatically by Hugging Face Spaces
-# All versions compatible with Python 3.10
+# Compatible with Python 3.10 (Hugging Face Spaces)
+# Note: streamlit is installed automatically by Hugging Face
 
 # Data fetching
 yfinance==0.2.44
@@ -18,12 +18,12 @@ kaleido==0.2.1
 pystan==3.9.1
 prophet==1.1.6
 
-# AI Agent
-langchain-core==0.3.28
-langchain-groq==0.2.3
-langgraph==0.2.60
-langgraph-checkpoint==2.0.10
-langgraph-prebuilt==0.1.7
+# AI Agent — unpinned to let pip resolve compatible versions
+langchain-core
+langchain-groq
+langgraph
+langgraph-checkpoint
+langgraph-prebuilt
 
 # Search
 rapidfuzz==3.10.1
