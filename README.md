@@ -83,7 +83,7 @@ AI-Financial-Analyst/
 | **Frontend** | Streamlit |
 | **Backend** | Python 3.10+ |
 | **AI Agent** | LangGraph + Ollama (llama3.2) |
-| **Forecasting** | Facebook Prophet |
+| **Forecasting** | Linear Regression |
 | **Database** | SQLite (via Python's built-in `sqlite3`) |
 | **Data Source** | yfinance (Yahoo Finance API) |
 | **Charts** | Plotly |
