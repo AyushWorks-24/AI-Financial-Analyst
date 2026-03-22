@@ -402,7 +402,9 @@ def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_
 def get_price_forecast(ticker_symbol: str):
     try:
         df = fetch_forecast_data(ticker_symbol)
+        print(f"Forecast data for {ticker_symbol}: rows={len(df)}, empty={df.empty}")
         if df.empty or len(df) < 60:
+            print(f"Not enough data: {len(df)} rows (need 60+)")
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -418,7 +420,8 @@ def get_price_forecast(ticker_symbol: str):
         fig.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat"], mode="lines", name="Forecast"))
         fig.update_layout(title=f"AI Forecast - {ticker_symbol}", height=500)
         return fig
-    except Exception:
+    except Exception as e:
+        print(f"Prophet forecast error for {ticker_symbol}: {e}")
         return None
 
 
