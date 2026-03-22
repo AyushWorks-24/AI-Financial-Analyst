@@ -3,8 +3,8 @@ from gnews import GNews
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from prophet import Prophet
 import logging
+from sklearn.linear_model import LinearRegression
 import numpy as np
 from fpdf import FPDF
 import io
@@ -400,29 +400,131 @@ def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_
 
 
 def get_price_forecast(ticker_symbol: str):
+    """
+    Generates a 14-day price forecast using Linear Regression.
+
+    Why not Prophet?
+    Prophet requires cmdstan (C++ binary) which is unreliable
+    on cloud servers. Linear Regression has zero binary dependencies
+    and works everywhere.
+
+    How it works:
+    1. Take the last 60 days of closing prices
+    2. Create features: day index + 7-day and 21-day moving averages
+    3. Train a Linear Regression model on these features
+    4. Predict the next 14 days
+    5. Add confidence bands using the model's residual std
+    """
     try:
+        from sklearn.linear_model import LinearRegression
+
         df = fetch_forecast_data(ticker_symbol)
-        print(f"Forecast data for {ticker_symbol}: rows={len(df)}, empty={df.empty}, cols={list(df.columns) if not df.empty else []}")
-        if df.empty:
-            return "empty"
-        if len(df) < 60:
-            return f"insufficient:{len(df)}"
+        print(f"LR Forecast - ticker={ticker_symbol} df_type={type(df)} empty={df.empty if hasattr(df,'empty') else 'N/A'} rows={len(df) if df is not None else 0}")
+        if df is None or df.empty or len(df) < 60:
+            print(f"LR Forecast - insufficient data: {len(df) if df is not None else 0} rows")
+            return None
+
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df_prophet = df.reset_index()[["Date", "Close"]]
-        df_prophet.columns = ["ds", "y"]
-        df_prophet["ds"] = df_prophet["ds"].dt.tz_localize(None)
-        model = Prophet(daily_seasonality=True, yearly_seasonality=True)
-        model.fit(df_prophet)
-        future = model.make_future_dataframe(periods=14)
-        forecast = model.predict(future)
+
+        # Use closing prices
+        close = df["Close"].dropna().values.flatten()
+        dates = df.index
+
+        # Features: day index, 7-day MA, 21-day MA
+        n = len(close)
+        X = []
+        y = []
+
+        for i in range(21, n):
+            ma7  = close[i-7:i].mean()
+            ma21 = close[i-21:i].mean()
+            X.append([i, ma7, ma21])
+            y.append(close[i])
+
+        X = np.array(X)
+        y = np.array(y)
+
+        model = LinearRegression()
+        model.fit(X, y)
+
+        # Calculate residual std for confidence bands
+        y_pred_train = model.predict(X)
+        residual_std = np.std(y - y_pred_train)
+
+        # Predict next 14 days
+        last_close = close[-21:]
+        forecast_values = []
+
+        for i in range(14):
+            idx = n + i
+            ma7  = np.append(close[-7+i:], forecast_values)[-7:].mean() if i < 7 else np.array(forecast_values[-7:]).mean()
+            ma21 = np.append(close[-21+i:], forecast_values)[-21:].mean() if i < 21 else np.array(forecast_values[-21:]).mean()
+            pred = model.predict([[idx, ma7, ma21]])[0]
+            forecast_values.append(pred)
+
+        # Build date range for forecast
+        last_date = dates[-1]
+        if hasattr(last_date, 'tz') and last_date.tz is not None:
+            last_date = last_date.tz_localize(None)
+        forecast_dates = pd.date_range(start=last_date, periods=15, freq="B")[1:]
+
+        forecast_arr = np.array(forecast_values)
+        upper = forecast_arr + 1.96 * residual_std
+        lower = forecast_arr - 1.96 * residual_std
+
+        # Build chart
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_prophet["ds"], y=df_prophet["y"], mode="lines", name="Actual"))
-        fig.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat"], mode="lines", name="Forecast"))
-        fig.update_layout(title=f"AI Forecast - {ticker_symbol}", height=500)
+
+        # Historical prices
+        hist_dates = [d.tz_localize(None) if hasattr(d, 'tz') and d.tz else d for d in dates[-90:]]
+        fig.add_trace(go.Scatter(
+            x=hist_dates,
+            y=close[-90:],
+            mode="lines",
+            name="Historical",
+            line=dict(color="#00c6ff", width=2)
+        ))
+
+        # Forecast line
+        fig.add_trace(go.Scatter(
+            x=forecast_dates,
+            y=forecast_arr,
+            mode="lines",
+            name="Forecast",
+            line=dict(color="#7f5af0", width=2, dash="dash")
+        ))
+
+        # Confidence band (upper)
+        fig.add_trace(go.Scatter(
+            x=forecast_dates,
+            y=upper,
+            mode="lines",
+            line=dict(width=0),
+            showlegend=False
+        ))
+
+        # Confidence band (lower + fill)
+        fig.add_trace(go.Scatter(
+            x=forecast_dates,
+            y=lower,
+            mode="lines",
+            fill="tonexty",
+            fillcolor="rgba(127, 90, 240, 0.15)",
+            line=dict(width=0),
+            name="95% Confidence"
+        ))
+
+        fig.update_layout(
+            title=f"14-Day Price Forecast — {ticker_symbol}",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            height=500
+        )
         return fig
+
     except Exception as e:
-        print(f"Prophet forecast error for {ticker_symbol}: {e}")
+        print(f"Forecast error for {ticker_symbol}: {e}")
         return None
 
 
