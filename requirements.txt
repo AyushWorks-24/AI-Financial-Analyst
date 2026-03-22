@@ -3,7 +3,7 @@
 # Note: streamlit is installed automatically by Hugging Face
 
 # Data fetching
-yfinance==0.2.44
+yfinance
 gnews==0.4.3
 
 # Data processing
