@@ -1,13 +1,34 @@
-streamlit
-pandas
-numpy
-yfinance
-plotly
-prophet
-gnews
-langchain-ollama
-langchain-core
-langgraph
-rapidfuzz
-fpdf
-kaleido
+# AI Financial Analyst — Python Dependencies
+# Generated from local environment to ensure deployment consistency
+
+# Core UI
+streamlit==1.54.0
+
+# Data fetching
+yfinance==1.1.0
+gnews==0.4.3
+
+# Data processing
+pandas==2.3.3
+numpy==2.4.2
+
+# Charts
+plotly==6.5.2
+kaleido==1.2.0
+
+# AI Forecasting
+prophet==1.3.0
+
+# AI Agent
+langchain-core==1.2.11
+langchain-groq==1.1.2
+langgraph==1.0.8
+langgraph-checkpoint==4.0.0
+langgraph-prebuilt==1.0.7
+langgraph-sdk==0.3.5
+
+# Search
+rapidfuzz==3.14.3
+
+# PDF Export
+fpdf2==2.8.7
