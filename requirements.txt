@@ -10,15 +10,14 @@ gnews==0.4.3
 numpy==1.26.4
 pandas==2.2.3
 
+# Machine Learning (forecast)
+scikit-learn==1.5.2
+
 # Charts
 plotly==5.24.1
 kaleido==0.2.1
 
-# AI Forecasting
-pystan==3.9.1
-prophet==1.1.6
-
-# AI Agent — unpinned to let pip resolve compatible versions
+# AI Agent
 langchain-core
 langchain-groq
 langgraph
@@ -30,3 +29,4 @@ rapidfuzz==3.10.1
 
 # PDF Export
 fpdf2==2.8.1
+# cache-bust: Sun Mar 22 16:56:29 UTC 2026
