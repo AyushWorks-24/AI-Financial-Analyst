@@ -402,10 +402,11 @@ def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_
 def get_price_forecast(ticker_symbol: str):
     try:
         df = fetch_forecast_data(ticker_symbol)
-        print(f"Forecast data for {ticker_symbol}: rows={len(df)}, empty={df.empty}")
-        if df.empty or len(df) < 60:
-            print(f"Not enough data: {len(df)} rows (need 60+)")
-            return None
+        print(f"Forecast data for {ticker_symbol}: rows={len(df)}, empty={df.empty}, cols={list(df.columns) if not df.empty else []}")
+        if df.empty:
+            return "empty"
+        if len(df) < 60:
+            return f"insufficient:{len(df)}"
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df_prophet = df.reset_index()[["Date", "Close"]]
