@@ -10,24 +10,27 @@ app_file: app.py
 pinned: false
 ---
 
-# AI Financial Analyst
+<div align="center">
 
-> An AI-powered real-time stock analysis web application built with Streamlit, LangGraph, Facebook Prophet, and SQLite.
+# 📈 AI Financial Analyst
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red?style=flat-square&logo=streamlit)
-![LangGraph](https://img.shields.io/badge/LangGraph-ReAct-purple?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-HuggingFace_Spaces-00FFEA?style=for-the-badge)](https://huggingface.co/spaces/ayush1609/AI-Financial-Analyst)
+[![GitHub](https://img.shields.io/badge/GitHub-AyushWorks--24-black?style=for-the-badge&logo=github)](https://github.com/AyushWorks-24/AI-Financial-Analyst)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)]()
+[![Streamlit](https://img.shields.io/badge/Streamlit-Deployed-ff4b4b?style=for-the-badge&logo=streamlit)]()
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
 
----
+> **A full-stack AI stock analysis platform — live market data, ML forecasting, backtesting, portfolio tracking, PDF export, and a conversational AI agent. All in one dashboard.**
 
-## 🧠 What is this?
-
-AI Financial Analyst is a full-stack web application that gives retail investors access to professional-grade stock analysis tools — for free. It combines live market data, machine learning forecasting, interactive backtesting, portfolio comparison, and a conversational AI agent all in one dark-themed dashboard.
-
-Built as a **Minor Project** for B.Tech AI & ML at Oriental College of Technology, Bhopal.
+</div>
 
 ---
+
+## 🧠 What Is This?
+
+AI Financial Analyst gives retail investors access to professional-grade stock analysis tools — combining live market data, machine learning forecasting, interactive backtesting, and a LangGraph ReAct AI agent that can answer financial questions using real tools.
+
+Built end-to-end solo: data pipeline → ML model → AI agent → deployed on HuggingFace Spaces.
 
 ## ✨ Features
 
@@ -229,8 +232,7 @@ This application is built for **educational purposes only**. The AI forecasts an
 
 ## 🔭 Future Scope
 
-- ☁️ Cloud deployment (Railway / Hugging Face Spaces)
-- ⚡ Switch from Ollama to Groq API for cloud-hosted AI
+- ⚡ Already deployed on HuggingFace Spaces with Groq API for cloud inference
 - 🔐 User authentication and personal watchlists
 - 📊 Sentiment analysis from news headlines
 - 🌐 Expand to crypto and forex markets
