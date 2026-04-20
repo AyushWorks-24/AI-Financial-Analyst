@@ -1,4 +1,5 @@
 import streamlit as st
+
 from core.engine import (
     get_stock_price_chart,
     get_news,
@@ -30,6 +31,7 @@ st.set_page_config(
 # ─────────────────────────────────────────
 # Load Custom CSS
 # ─────────────────────────────────────────
+
 def load_css():
     css_path = os.path.join("ui", "style.css")
     if os.path.exists(css_path):
@@ -41,20 +43,22 @@ load_css()
 # ─────────────────────────────────────────
 # NAVBAR
 # ─────────────────────────────────────────
+
 st.markdown("""
 <div class="navbar">
-    <div class="nav-title">📊 AI Financial Analyst</div>
-    <div class="nav-items">
-        <span>Analysis</span>
-        <span>Forecast</span>
-        <span>Backtest</span>
-    </div>
+  <div class="nav-title">📊 AI Financial Analyst</div>
+  <div class="nav-items">
+    <span>Analysis</span>
+    <span>Forecast</span>
+    <span>Backtest</span>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────
 # Sidebar Controls
 # ─────────────────────────────────────────
+
 @st.cache_data
 def load_tickers():
     path = os.path.join("data", "tickers.csv")
@@ -66,8 +70,8 @@ tickers_df = load_tickers()
 ticker_list = tickers_df["Ticker"].tolist()
 
 search_query = st.sidebar.text_input("🔍 Search Stock", placeholder="Type ticker...")
-ticker = None
 
+ticker = None
 if search_query and len(search_query) >= 2:
     contains_matches = [t for t in ticker_list if search_query.upper() in t]
     fuzzy_matches = process.extract(search_query.upper(), ticker_list, scorer=fuzz.WRatio, limit=10)
@@ -86,14 +90,11 @@ use_date_filter = st.sidebar.checkbox("Use Custom Date Range")
 start_date, end_date = None, None
 if use_date_filter:
     start_date = st.sidebar.date_input("Start Date", date(2024, 1, 1))
-    end_date = st.sidebar.date_input("End Date", date.today())
+    end_date   = st.sidebar.date_input("End Date", date.today())
 
 # ── Cache Status Panel ──
-# Shows users that data is being cached locally,
-# and gives them control to clear it if needed.
 st.sidebar.markdown("---")
 st.sidebar.markdown("#### 🗄️ Data Cache")
-
 stats = _cache_stats()
 if stats["total"] > 0:
     st.sidebar.markdown(
@@ -117,32 +118,56 @@ else:
 # ─────────────────────────────────────────
 # LIVE PRICE HEADER
 # ─────────────────────────────────────────
+
 if ticker:
-    stock = yf.Ticker(ticker)
-    hist = stock.history(period="2d")
+    # ── FIX: wrapped in try/except to prevent app crash on rate-limit ──
+    # Previously this was a bare call that crashed the entire app when
+    # Yahoo Finance returned YFRateLimitError from a cloud IP.
+    # Now it fails gracefully and shows a warning instead.
+    try:
+        from core.engine import _YF_SESSION
+        stock = yf.Ticker(ticker, session=_YF_SESSION)
+        hist = stock.history(period="2d")
+    except Exception:
+        hist = pd.DataFrame()
+
     if not hist.empty:
-        price = hist["Close"].iloc[-1]
+        price      = hist["Close"].iloc[-1]
         prev_price = hist["Close"].iloc[-2] if len(hist) >= 2 else price
-        change = price - prev_price
+        change     = price - prev_price
         change_pct = (change / prev_price) * 100
         arrow = "▲" if change >= 0 else "▼"
         color = "#00c6ff" if change >= 0 else "#ff4d4d"
+
         col1, col2 = st.columns([3, 1])
         with col1:
             st.markdown(f"""
             <div class="stock-header">
-                <h2>{ticker}</h2>
-                <div class="price">${price:.2f}
-                    <span style="font-size:1rem; color:{color}; margin-left:12px;">
-                        {arrow} {change:+.2f} ({change_pct:+.2f}%)
-                    </span>
-                </div>
+              <h2>{ticker}</h2>
+              <div class="price">${price:.2f}
+                <span style="font-size:1rem; color:{color}; margin-left:12px;">
+                  {arrow} {change:+.2f} ({change_pct:+.2f}%)
+                </span>
+              </div>
             </div>
             """, unsafe_allow_html=True)
+    else:
+        # Live price unavailable — show ticker name without price
+        # This happens when Yahoo Finance rate-limits the cloud IP.
+        # The rest of the app still works because other data comes from cache.
+        st.markdown(f"""
+        <div class="stock-header">
+          <h2>{ticker}</h2>
+          <div class="price" style="color:#8b949e; font-size:0.9rem;">
+            ⚠️ Live price unavailable (Yahoo Finance rate limit). Cached data will still load below.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────
+
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📊 Analysis",
     "📈 Fundamentals",
@@ -157,6 +182,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # ─────────────────────────────────────────
 # TAB 1 — Analysis
 # ─────────────────────────────────────────
+
 with tab1:
     if not ticker:
         st.info("👈 Search and select a stock from the sidebar to get started.")
@@ -172,7 +198,6 @@ with tab1:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # ── Quick CSV export for price data ──
             raw_df, _ = fetch_price_data(ticker, period, start_date, end_date)
             if not raw_df.empty:
                 if isinstance(raw_df.columns, pd.MultiIndex):
@@ -187,78 +212,79 @@ with tab1:
         else:
             st.warning("Could not load price chart.")
 
-        # ── Analysis Summary with styled badges ──
         _df2, _ = fetch_price_data(ticker, period="1y")
         if _df2 is not None and not _df2.empty:
             if isinstance(_df2.columns, pd.MultiIndex):
                 _df2.columns = _df2.columns.get_level_values(0)
             if "Close" in _df2.columns and len(_df2) >= 50:
-                _close = _df2["Close"].dropna()
+                _close   = _df2["Close"].dropna()
                 _returns = _close.pct_change().dropna()
                 _price_val = float(_close.iloc[-1])
-                _sma20 = float(_close.rolling(20).mean().iloc[-1])
-                _sma50 = float(_close.rolling(50).mean().iloc[-1])
-                _vol = float(_returns.std() * np.sqrt(252))
+                _sma20     = float(_close.rolling(20).mean().iloc[-1])
+                _sma50     = float(_close.rolling(50).mean().iloc[-1])
+                _vol       = float(_returns.std() * np.sqrt(252))
+
                 if _price_val > _sma20 and _sma20 > _sma50:
                     _trend, _trend_cls = "Uptrend", "green"
                 elif _price_val < _sma20 and _sma20 < _sma50:
                     _trend, _trend_cls = "Downtrend", "red"
                 else:
                     _trend, _trend_cls = "Sideways", "purple"
-                _risk = "High" if _vol > 0.4 else ("Medium" if _vol > 0.25 else "Low")
+
+                _risk     = "High" if _vol > 0.4 else ("Medium" if _vol > 0.25 else "Low")
                 _risk_cls = "red" if _risk == "High" else ("cyan" if _risk == "Medium" else "green")
+
                 st.markdown(f"""
                 <div class="section-card">
-                    <div style="font-size:0.82rem; font-weight:600;
-                                color:var(--text-secondary); text-transform:uppercase;
-                                letter-spacing:0.08em; margin-bottom:16px;">
-                        Automated Analysis
+                  <div style="font-size:0.82rem; font-weight:600;
+                       color:var(--text-secondary); text-transform:uppercase;
+                       letter-spacing:0.08em; margin-bottom:16px;">
+                    Automated Analysis
+                  </div>
+                  <div style="display:flex; gap:36px; flex-wrap:wrap; align-items:flex-end;">
+                    <div>
+                      <div style="font-size:0.7rem; color:var(--text-muted);
+                           text-transform:uppercase; letter-spacing:0.08em;
+                           margin-bottom:4px;">Current Price</div>
+                      <div style="font-family:'JetBrains Mono',monospace;
+                           font-size:1.4rem; font-weight:600;
+                           color:var(--accent-cyan);">${_price_val:.2f}</div>
                     </div>
-                    <div style="display:flex; gap:36px; flex-wrap:wrap; align-items:flex-end;">
-                        <div>
-                            <div style="font-size:0.7rem; color:var(--text-muted);
-                                        text-transform:uppercase; letter-spacing:0.08em;
-                                        margin-bottom:4px;">Current Price</div>
-                            <div style="font-family:'JetBrains Mono',monospace;
-                                        font-size:1.4rem; font-weight:600;
-                                        color:var(--accent-cyan);">${_price_val:.2f}</div>
-                        </div>
-                        <div>
-                            <div style="font-size:0.7rem; color:var(--text-muted);
-                                        text-transform:uppercase; letter-spacing:0.08em;
-                                        margin-bottom:6px;">Trend</div>
-                            <span class="badge {_trend_cls}">{_trend}</span>
-                        </div>
-                        <div>
-                            <div style="font-size:0.7rem; color:var(--text-muted);
-                                        text-transform:uppercase; letter-spacing:0.08em;
-                                        margin-bottom:4px;">Annualized Volatility</div>
-                            <div style="font-family:'JetBrains Mono',monospace;
-                                        font-size:1.1rem; font-weight:600;
-                                        color:var(--text-primary);">{_vol:.2%}</div>
-                        </div>
-                        <div>
-                            <div style="font-size:0.7rem; color:var(--text-muted);
-                                        text-transform:uppercase; letter-spacing:0.08em;
-                                        margin-bottom:6px;">Risk Level</div>
-                            <span class="badge {_risk_cls}">{_risk}</span>
-                        </div>
+                    <div>
+                      <div style="font-size:0.7rem; color:var(--text-muted);
+                           text-transform:uppercase; letter-spacing:0.08em;
+                           margin-bottom:6px;">Trend</div>
+                      <span class="badge {_trend_cls}">{_trend}</span>
                     </div>
+                    <div>
+                      <div style="font-size:0.7rem; color:var(--text-muted);
+                           text-transform:uppercase; letter-spacing:0.08em;
+                           margin-bottom:4px;">Annualized Volatility</div>
+                      <div style="font-family:'JetBrains Mono',monospace;
+                           font-size:1.1rem; font-weight:600;
+                           color:var(--text-primary);">{_vol:.2%}</div>
+                    </div>
+                    <div>
+                      <div style="font-size:0.7rem; color:var(--text-muted);
+                           text-transform:uppercase; letter-spacing:0.08em;
+                           margin-bottom:6px;">Risk Level</div>
+                      <span class="badge {_risk_cls}">{_risk}</span>
+                    </div>
+                  </div>
                 </div>
                 """, unsafe_allow_html=True)
 
         metrics = calculate_basic_risk_metrics(ticker)
         if metrics:
             col1, col2, col3 = st.columns(3)
-            col1.metric("📉 Volatility", f"{metrics['Volatility']:.2%}")
+            col1.metric("📉 Volatility",   f"{metrics['Volatility']:.2%}")
             col2.metric("📐 Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}")
             col3.metric("🕳️ Max Drawdown", f"{metrics['Max Drawdown']:.2%}")
 
-            # ── Quick CSV export for metrics ──
             metrics_df = pd.DataFrame([{
-                "Ticker": ticker,
-                "Period": period,
-                "Volatility": f"{metrics['Volatility']:.2%}",
+                "Ticker":       ticker,
+                "Period":       period,
+                "Volatility":   f"{metrics['Volatility']:.2%}",
                 "Sharpe Ratio": f"{metrics['Sharpe Ratio']:.2f}",
                 "Max Drawdown": f"{metrics['Max Drawdown']:.2%}",
             }])
@@ -274,6 +300,7 @@ with tab1:
 # ─────────────────────────────────────────
 # TAB 2 — Fundamentals
 # ─────────────────────────────────────────
+
 with tab2:
     if not ticker:
         st.info("👈 Select a stock from the sidebar first.")
@@ -285,25 +312,32 @@ with tab2:
         else:
             st.warning("No fundamental data available for this ticker.")
 
-        stock_obj = yf.Ticker(ticker)
-        info = stock_obj.info
+        # ── FIX: wrapped in try/except — previously crashed at line 289 ──
+        # stock_obj.info was a raw yfinance call with no error handling.
+        # Now it falls back to an empty dict so the rest of the tab still renders.
+        try:
+            from core.engine import _YF_SESSION
+            stock_obj = yf.Ticker(ticker, session=_YF_SESSION)
+            info = stock_obj.info
+        except Exception:
+            info = {}
+
         description = info.get("longBusinessSummary")
         if description:
             with st.expander("📋 About the Company"):
                 st.write(description)
 
-        # ── Export fundamentals as CSV ──
         fund_keys = {
-            "Company": info.get("longName", ticker),
-            "Sector": info.get("sector", "N/A"),
-            "Market Cap": info.get("marketCap", "N/A"),
-            "P/E Ratio": info.get("forwardPE", "N/A"),
-            "EPS (TTM)": info.get("trailingEps", "N/A"),
-            "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
-            "52W Low": info.get("fiftyTwoWeekLow", "N/A"),
+            "Company":        info.get("longName", ticker),
+            "Sector":         info.get("sector", "N/A"),
+            "Market Cap":     info.get("marketCap", "N/A"),
+            "P/E Ratio":      info.get("forwardPE", "N/A"),
+            "EPS (TTM)":      info.get("trailingEps", "N/A"),
+            "52W High":       info.get("fiftyTwoWeekHigh", "N/A"),
+            "52W Low":        info.get("fiftyTwoWeekLow", "N/A"),
             "Dividend Yield": info.get("dividendYield", "N/A"),
         }
-        fund_df = pd.DataFrame([fund_keys])
+        fund_df  = pd.DataFrame([fund_keys])
         fund_csv = fund_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             label="⬇️ Download Fundamentals (CSV)",
@@ -315,6 +349,7 @@ with tab2:
 # ─────────────────────────────────────────
 # TAB 3 — News
 # ─────────────────────────────────────────
+
 with tab3:
     if not ticker:
         st.info("👈 Select a stock from the sidebar first.")
@@ -327,6 +362,7 @@ with tab3:
 # ─────────────────────────────────────────
 # TAB 4 — AI Forecast
 # ─────────────────────────────────────────
+
 with tab4:
     if not ticker:
         st.info("👈 Select a stock from the sidebar first.")
@@ -349,12 +385,12 @@ with tab4:
                 "It is NOT financial advice. Past patterns do not guarantee future results."
             )
         else:
-            debug_msg = forecast_fig if isinstance(forecast_fig, str) else "none"
-            st.warning(f"Forecast unavailable (debug: {debug_msg}). yfinance may be rate-limiting on this server.")
+            st.warning("Forecast unavailable. yfinance may be rate-limiting on this server.")
 
 # ─────────────────────────────────────────
 # TAB 5 — Backtest
 # ─────────────────────────────────────────
+
 with tab5:
     if not ticker:
         st.info("👈 Select a stock from the sidebar first.")
@@ -407,33 +443,33 @@ with tab5:
                 st.plotly_chart(fig_dd, use_container_width=True)
 
                 if len(df_bt) > 0:
-                    final_market = df_bt["Cumulative_Market"].iloc[-1]
+                    final_market   = df_bt["Cumulative_Market"].iloc[-1]
                     final_strategy = df_bt["Cumulative_Strategy"].iloc[-1]
-                    max_dd = df_bt["Drawdown"].min()
+                    max_dd         = df_bt["Drawdown"].min()
                     col1, col2, col3 = st.columns(3)
                     col1.metric("📈 Buy & Hold Return", f"{(final_market - 1) * 100:.2f}%")
-                    col2.metric("🧠 Strategy Return", f"{(final_strategy - 1) * 100:.2f}%")
-                    col3.metric("🕳️ Max Drawdown", f"{max_dd * 100:.2f}%")
+                    col2.metric("🧠 Strategy Return",   f"{(final_strategy - 1) * 100:.2f}%")
+                    col3.metric("🕳️ Max Drawdown",      f"{max_dd * 100:.2f}%")
 
-                # ── Export backtest results ──
-                bt_export = df_bt[["Cumulative_Market", "Cumulative_Strategy", "Drawdown"]].copy()
-                bt_export.columns = ["Buy & Hold", "MA Strategy", "Drawdown"]
-                bt_csv = bt_export.reset_index().to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="⬇️ Download Backtest Results (CSV)",
-                    data=bt_csv,
-                    file_name=f"{ticker}_backtest_{short_win}_{long_win}.csv",
-                    mime="text/csv",
-                )
+                    bt_export          = df_bt[["Cumulative_Market", "Cumulative_Strategy", "Drawdown"]].copy()
+                    bt_export.columns  = ["Buy & Hold", "MA Strategy", "Drawdown"]
+                    bt_csv = bt_export.reset_index().to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Download Backtest Results (CSV)",
+                        data=bt_csv,
+                        file_name=f"{ticker}_backtest_{short_win}_{long_win}.csv",
+                        mime="text/csv",
+                    )
             else:
                 st.warning("Not enough data to run backtest for this ticker.")
 
 # ─────────────────────────────────────────
 # TAB 6 — AI Chat
 # ─────────────────────────────────────────
+
 with tab6:
     st.subheader("💬 AI Financial Analyst Chat")
-    st.caption("Powered by llama3.2 via Ollama. Ask anything about any stock.")
+    st.caption("Powered by LLaMA 3.3 70B via Groq. Ask anything about any stock.")
 
     from core.agent import create_agent_executor
 
@@ -450,6 +486,7 @@ with tab6:
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
+
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
@@ -469,6 +506,7 @@ with tab6:
 # ─────────────────────────────────────────
 # TAB 7 — Portfolio Tracker
 # ─────────────────────────────────────────
+
 with tab7:
     st.subheader("📂 Portfolio Tracker")
     st.caption("Add multiple stocks and compare their performance side by side.")
@@ -500,7 +538,12 @@ with tab7:
         elif len(st.session_state.portfolio) >= 8:
             st.warning("Maximum 8 stocks allowed for a clean comparison.")
         else:
-            test = yf.download(cleaned, period="5d", progress=False)
+            try:
+                from core.engine import _YF_SESSION
+                test = yf.download(cleaned, period="5d", progress=False, session=_YF_SESSION)
+            except Exception:
+                test = pd.DataFrame()
+
             if test.empty:
                 st.error(f"Could not find data for '{cleaned}'. Check the ticker symbol.")
             else:
@@ -524,9 +567,13 @@ with tab7:
 
         @st.cache_data(ttl=300)
         def fetch_normalized(tickers: tuple, period: str):
+            from core.engine import _YF_SESSION
             result = {}
             for t in tickers:
-                df = yf.download(t, period=period, progress=False)
+                try:
+                    df = yf.download(t, period=period, progress=False, session=_YF_SESSION)
+                except Exception:
+                    continue
                 if df.empty:
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
@@ -572,12 +619,13 @@ with tab7:
                 if m:
                     total_return = norm_df[t].iloc[-1] - 100 if t in norm_df.columns else None
                     metrics_rows.append({
-                        "Ticker": t,
-                        "Return (%)": f"{total_return:.2f}%" if total_return is not None else "N/A",
-                        "Volatility": f"{m['Volatility']:.2%}",
+                        "Ticker":       t,
+                        "Return (%)":   f"{total_return:.2f}%" if total_return is not None else "N/A",
+                        "Volatility":   f"{m['Volatility']:.2%}",
                         "Sharpe Ratio": f"{m['Sharpe Ratio']:.2f}",
                         "Max Drawdown": f"{m['Max Drawdown']:.2%}",
                     })
+
             if metrics_rows:
                 st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
 
@@ -613,6 +661,7 @@ with tab7:
                 mime="text/csv",
                 use_container_width=True
             )
+
     else:
         st.info(
             "👆 Type a ticker above and click ➕ Add Stock. "
@@ -620,8 +669,9 @@ with tab7:
         )
 
 # ─────────────────────────────────────────
-# TAB 8 — Export (dedicated page)
+# TAB 8 — Export
 # ─────────────────────────────────────────
+
 with tab8:
     st.subheader("📤 Export Center")
     st.caption("Generate and download reports for any stock.")
@@ -632,16 +682,11 @@ with tab8:
         st.markdown(f"### Currently selected: `{ticker}` — Period: `{period}`")
         st.divider()
 
-        # ── PDF Full Report ──
         st.markdown("#### 📄 Full PDF Report")
         st.markdown(
             "Includes: stock name & price, risk metrics table, "
             "automated analysis summary, and price chart image."
         )
-
-        # Why a button instead of auto-generating?
-        # PDF generation takes a few seconds (chart rendering via kaleido).
-        # We only run it when the user explicitly asks — not on every rerun.
         if st.button("🖨️ Generate PDF Report", use_container_width=True):
             with st.spinner("Building your PDF report... this takes ~10 seconds ⏳"):
                 try:
@@ -659,12 +704,10 @@ with tab8:
 
         st.divider()
 
-        # ── CSV Exports ──
         st.markdown("#### 📊 CSV Data Exports")
         col1, col2 = st.columns(2)
 
         with col1:
-            # Price history CSV
             st.markdown("**Price History**")
             raw_df, _ = fetch_price_data(ticker, period, start_date, end_date)
             if not raw_df.empty:
@@ -681,14 +724,13 @@ with tab8:
                 )
 
         with col2:
-            # Risk metrics CSV
             st.markdown("**Risk Metrics**")
             metrics = calculate_basic_risk_metrics(ticker, period)
             if metrics:
                 metrics_df = pd.DataFrame([{
-                    "Ticker": ticker,
-                    "Period": period,
-                    "Volatility": f"{metrics['Volatility']:.2%}",
+                    "Ticker":       ticker,
+                    "Period":       period,
+                    "Volatility":   f"{metrics['Volatility']:.2%}",
                     "Sharpe Ratio": f"{metrics['Sharpe Ratio']:.2f}",
                     "Max Drawdown": f"{metrics['Max Drawdown']:.2%}",
                 }])

@@ -13,45 +13,52 @@ import os
 import sqlite3
 import json
 import hashlib
+import requests
 
 logging.getLogger("prophet").setLevel(logging.WARNING)
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
 
 # ─────────────────────────────────────────
+# SHARED REQUESTS SESSION
+# ─────────────────────────────────────────
+# Yahoo Finance rate-limits cloud server IPs (HuggingFace, Render, etc.)
+# because they see many requests from the same IP.
+# Sending browser-like headers significantly reduces the chance of being blocked.
+# We create ONE session and reuse it everywhere — not a new one per call.
+
+def _make_yf_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
+    return session
+
+# Module-level singleton — created once when engine.py is imported
+_YF_SESSION = _make_yf_session()
+
+
+# ─────────────────────────────────────────
 # SQLITE CACHE LAYER
 # ─────────────────────────────────────────
-# The database file lives in the project root.
-# SQLite creates it automatically if it doesn't exist.
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "cache.db")
 
-# How long cached data stays valid before we re-fetch
-# Price data: 6 hours (markets update during trading hours)
-# Company info: 24 hours (fundamentals change slowly)
 CACHE_TTL = {
-    "price":   60 * 60 * 6,   # 6 hours in seconds
+    "price":   60 * 60 * 6,   # 6 hours
     "info":    60 * 60 * 24,  # 24 hours
     "metrics": 60 * 60 * 6,   # 6 hours
 }
 
 
 def _get_db():
-    """
-    Opens (or creates) the SQLite database and ensures
-    the cache table exists.
-
-    Why a single table with JSON?
-    Simpler than creating separate tables for each data type.
-    We store any Python object as a JSON string and deserialize
-    it when we read it back.
-
-    Table schema:
-    - cache_key: unique string identifying what was cached
-                 (e.g. "price_AAPL_1y")
-    - data_json: the actual data serialized as JSON
-    - cached_at: Unix timestamp of when it was stored
-    - data_type: "price", "info", or "metrics"
-    """
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS cache (
@@ -66,30 +73,11 @@ def _get_db():
 
 
 def _make_key(data_type: str, *args) -> str:
-    """
-    Builds a unique cache key from the data type + arguments.
-    e.g. _make_key("price", "AAPL", "1y") → "price_AAPL_1y"
-
-    Why not just concatenate strings?
-    If args contain special characters or spaces, concatenation
-    could produce collisions. This approach is clean and readable.
-    """
     parts = [data_type] + [str(a) for a in args]
     return "_".join(parts)
 
 
 def _cache_get(cache_key: str, data_type: str):
-    """
-    Tries to read a value from the cache.
-
-    Returns the deserialized data if it exists and is still fresh.
-    Returns None if the cache is empty, expired, or corrupted.
-
-    Why check TTL here instead of at write time?
-    Because TTL can change between app versions. Checking at read
-    time means old cached data naturally expires without needing
-    a cleanup job.
-    """
     try:
         conn = _get_db()
         row = conn.execute(
@@ -99,31 +87,22 @@ def _cache_get(cache_key: str, data_type: str):
         conn.close()
 
         if row is None:
-            return None  # cache miss — nothing stored yet
+            return None
 
         data_json, cached_at = row
         age_seconds = datetime.now().timestamp() - cached_at
         ttl = CACHE_TTL.get(data_type, 60 * 60 * 6)
 
         if age_seconds > ttl:
-            return None  # cache expired — needs refresh
+            return None
 
         return json.loads(data_json)
 
     except Exception:
-        return None  # if anything goes wrong, treat as cache miss
+        return None
 
 
 def _cache_set(cache_key: str, data_type: str, data):
-    """
-    Saves data to the cache.
-
-    Uses INSERT OR REPLACE so if the key already exists,
-    it gets overwritten with fresh data.
-
-    We silently ignore errors here — if caching fails,
-    the app should still work, just without caching.
-    """
     try:
         conn = _get_db()
         conn.execute(
@@ -135,14 +114,26 @@ def _cache_set(cache_key: str, data_type: str, data):
         conn.commit()
         conn.close()
     except Exception:
-        pass  # caching is best-effort — never crash the app for it
+        pass
+
+
+def _cache_get_stale(cache_key: str):
+    """Read from cache ignoring TTL — used as last-resort fallback when API fails."""
+    try:
+        conn = _get_db()
+        row = conn.execute(
+            "SELECT data_json FROM cache WHERE cache_key = ?",
+            (cache_key,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row[0])
+    except Exception:
+        pass
+    return None
 
 
 def _cache_stats() -> dict:
-    """
-    Returns stats about the current cache.
-    Used in the Streamlit sidebar to show users the cache status.
-    """
     try:
         conn = _get_db()
         total = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
@@ -164,7 +155,6 @@ def _cache_stats() -> dict:
 
 
 def clear_cache():
-    """Wipes all cached data. Called from the sidebar clear button."""
     try:
         conn = _get_db()
         conn.execute("DELETE FROM cache")
@@ -176,35 +166,34 @@ def clear_cache():
 
 
 # ─────────────────────────────────────────
-# DATA FETCHING (with cache)
+# DATA FETCHING (with cache + session)
 # ─────────────────────────────────────────
 
 def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None):
     """
     Fetches OHLCV price data with SQLite caching.
 
-    Cache key includes ticker + period (or date range) so
-    AAPL/1y and AAPL/6mo are stored separately.
+    Uses a shared requests.Session with browser headers to reduce
+    the chance of Yahoo Finance rate-limiting cloud server IPs.
 
-    If yfinance fails AND we have stale cache, we return
-    the stale data with a warning flag so the UI can
-    tell the user the data might be old.
+    Returns (DataFrame, is_stale):
+    - is_stale=False → fresh data (from cache or live fetch)
+    - is_stale=True  → fallback to expired cache because API failed
+    - empty DataFrame → complete failure, no cache available
     """
-    # Build a cache key based on all the parameters
     if start_date and end_date:
         cache_key = _make_key("price", ticker_symbol, str(start_date), str(end_date))
     else:
         cache_key = _make_key("price", ticker_symbol, period or "1y")
 
-    # Try cache first
+    # 1. Try fresh cache
     cached = _cache_get(cache_key, "price")
     if cached is not None:
-        # Reconstruct DataFrame from the JSON we stored
         df = pd.DataFrame(cached["data"])
         df.index = pd.to_datetime(cached["index"])
-        return df, False  # False = data is NOT stale
+        return df, False
 
-    # Cache miss — fetch from yfinance
+    # 2. Cache miss — try live fetch with session
     try:
         if start_date and end_date:
             data = yf.download(
@@ -213,6 +202,7 @@ def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None)
                 end=end_date,
                 progress=False,
                 auto_adjust=False,
+                session=_YF_SESSION,
             )
         else:
             data = yf.download(
@@ -220,60 +210,53 @@ def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None)
                 period=period,
                 progress=False,
                 auto_adjust=False,
+                session=_YF_SESSION,
             )
 
         if not data.empty:
-            # Save to cache as JSON-serializable dict
-            # We store index separately because DataFrames have
-            # a DatetimeIndex which JSON can't serialize directly
             _cache_set(cache_key, "price", {
                 "data": data.to_dict(),
                 "index": [str(i) for i in data.index]
             })
+            return data, False
 
-        return data, False
+    except Exception as e:
+        logging.warning(f"yfinance fetch failed for {ticker_symbol}: {e}")
 
-    except Exception:
-        # yfinance failed — try to return stale cache as fallback
-        # We bypass TTL check here by reading directly from DB
-        try:
-            conn = _get_db()
-            row = conn.execute(
-                "SELECT data_json FROM cache WHERE cache_key = ?",
-                (cache_key,)
-            ).fetchone()
-            conn.close()
+    # 3. Live fetch failed — try stale cache as fallback
+    stale = _cache_get_stale(cache_key)
+    if stale:
+        df = pd.DataFrame(stale["data"])
+        df.index = pd.to_datetime(stale["index"])
+        return df, True  # is_stale=True tells UI to show warning banner
 
-            if row:
-                cached_stale = json.loads(row[0])
-                df = pd.DataFrame(cached_stale["data"])
-                df.index = pd.to_datetime(cached_stale["index"])
-                return df, True  # True = data IS stale (from fallback)
-        except Exception:
-            pass
-
-        return pd.DataFrame(), False  # complete failure
+    return pd.DataFrame(), False  # complete failure
 
 
 def get_company_info(ticker_symbol: str) -> dict:
     """
     Fetches company info with SQLite caching.
-    Company info changes slowly so we cache it for 24 hours.
+    Uses shared session to reduce rate-limit risk.
+    Falls back to stale cache if API call fails.
     """
     cache_key = _make_key("info", ticker_symbol)
+
+    # 1. Fresh cache
     cached = _cache_get(cache_key, "info")
     if cached is not None:
         return cached
 
+    # 2. Live fetch with session
     try:
-        stock = yf.Ticker(ticker_symbol)
+        stock = yf.Ticker(ticker_symbol, session=_YF_SESSION)
         info = stock.info
-        if not info or "regularMarketPrice" not in info:
+
+        if not info or len(info) < 5:
+            # Empty info dict — ticker might be wrong format for Indian stocks
             if not ticker_symbol.endswith(".NS") and not ticker_symbol.endswith(".BO"):
                 return get_company_info(f"{ticker_symbol}.NS")
 
-        # Only cache JSON-serializable values
-        # yfinance sometimes returns non-serializable objects
+        # Sanitize: only cache JSON-serializable values
         safe_info = {}
         for k, v in info.items():
             try:
@@ -286,19 +269,14 @@ def get_company_info(ticker_symbol: str) -> dict:
         return safe_info
 
     except Exception as e:
-        # Try stale cache as fallback
-        try:
-            conn = _get_db()
-            row = conn.execute(
-                "SELECT data_json FROM cache WHERE cache_key = ?",
-                (cache_key,)
-            ).fetchone()
-            conn.close()
-            if row:
-                return json.loads(row[0])
-        except Exception:
-            pass
-        return {"error": f"{e}"}
+        logging.warning(f"yfinance info fetch failed for {ticker_symbol}: {e}")
+
+    # 3. Stale cache fallback
+    stale = _cache_get_stale(cache_key)
+    if stale:
+        return stale
+
+    return {"error": f"Could not fetch data for {ticker_symbol}. Yahoo Finance may be rate-limiting."}
 
 
 def fetch_forecast_data(ticker_symbol):
@@ -314,12 +292,10 @@ def fetch_forecast_data(ticker_symbol):
 
 
 # ─────────────────────────────────────────
-# ALL EXISTING FUNCTIONS (unchanged logic,
-# just updated to use cached fetch_price_data)
+# FEATURE FUNCTIONS
 # ─────────────────────────────────────────
 
 def get_news(ticker_symbol: str) -> str:
-    # News is NOT cached — always fetch fresh
     try:
         info = get_company_info(ticker_symbol)
         company_name = info.get("longName", ticker_symbol)
@@ -341,7 +317,7 @@ def get_news(ticker_symbol: str) -> str:
         markdown_table = "| Date | Title |\n|---|---|\n" + "\n".join(formatted_news)
         return markdown_table
     except Exception as e:
-        return f"{e}"
+        return f"News fetch failed: {e}"
 
 
 def get_fundamental_data(ticker_symbol: str) -> str:
@@ -367,7 +343,7 @@ def get_fundamental_data(ticker_symbol: str) -> str:
         ]
         return "| Metric | Value |\n|---|---|\n" + "\n".join(data)
     except Exception as e:
-        return f"{e}"
+        return f"Could not load fundamentals: {e}"
 
 
 def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_date=None):
@@ -401,40 +377,22 @@ def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_
 
 def get_price_forecast(ticker_symbol: str):
     """
-    Generates a 14-day price forecast using Linear Regression.
-
-    Why not Prophet?
-    Prophet requires cmdstan (C++ binary) which is unreliable
-    on cloud servers. Linear Regression has zero binary dependencies
-    and works everywhere.
-
-    How it works:
-    1. Take the last 60 days of closing prices
-    2. Create features: day index + 7-day and 21-day moving averages
-    3. Train a Linear Regression model on these features
-    4. Predict the next 14 days
-    5. Add confidence bands using the model's residual std
+    14-day price forecast using Linear Regression.
+    Features: day index + 7-day and 21-day moving averages.
     """
     try:
-        from sklearn.linear_model import LinearRegression
-
         df = fetch_forecast_data(ticker_symbol)
-        print(f"LR Forecast - ticker={ticker_symbol} df_type={type(df)} empty={df.empty if hasattr(df,'empty') else 'N/A'} rows={len(df) if df is not None else 0}")
         if df is None or df.empty or len(df) < 60:
-            print(f"LR Forecast - insufficient data: {len(df) if df is not None else 0} rows")
             return None
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # Use closing prices
         close = df["Close"].dropna().values.flatten()
         dates = df.index
 
-        # Features: day index, 7-day MA, 21-day MA
         n = len(close)
-        X = []
-        y = []
+        X, y = [], []
 
         for i in range(21, n):
             ma7  = close[i-7:i].mean()
@@ -448,14 +406,10 @@ def get_price_forecast(ticker_symbol: str):
         model = LinearRegression()
         model.fit(X, y)
 
-        # Calculate residual std for confidence bands
         y_pred_train = model.predict(X)
         residual_std = np.std(y - y_pred_train)
 
-        # Predict next 14 days
-        last_close = close[-21:]
         forecast_values = []
-
         for i in range(14):
             idx = n + i
             ma7  = np.append(close[-7+i:], forecast_values)[-7:].mean() if i < 7 else np.array(forecast_values[-7:]).mean()
@@ -463,7 +417,6 @@ def get_price_forecast(ticker_symbol: str):
             pred = model.predict([[idx, ma7, ma21]])[0]
             forecast_values.append(pred)
 
-        # Build date range for forecast
         last_date = dates[-1]
         if hasattr(last_date, 'tz') and last_date.tz is not None:
             last_date = last_date.tz_localize(None)
@@ -473,10 +426,8 @@ def get_price_forecast(ticker_symbol: str):
         upper = forecast_arr + 1.96 * residual_std
         lower = forecast_arr - 1.96 * residual_std
 
-        # Build chart
         fig = go.Figure()
 
-        # Historical prices
         hist_dates = [d.tz_localize(None) if hasattr(d, 'tz') and d.tz else d for d in dates[-90:]]
         fig.add_trace(go.Scatter(
             x=hist_dates,
@@ -486,7 +437,6 @@ def get_price_forecast(ticker_symbol: str):
             line=dict(color="#00c6ff", width=2)
         ))
 
-        # Forecast line
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=forecast_arr,
@@ -495,7 +445,6 @@ def get_price_forecast(ticker_symbol: str):
             line=dict(color="#7f5af0", width=2, dash="dash")
         ))
 
-        # Confidence band (upper)
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=upper,
@@ -504,7 +453,6 @@ def get_price_forecast(ticker_symbol: str):
             showlegend=False
         ))
 
-        # Confidence band (lower + fill)
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=lower,
@@ -524,7 +472,7 @@ def get_price_forecast(ticker_symbol: str):
         return fig
 
     except Exception as e:
-        print(f"Forecast error for {ticker_symbol}: {e}")
+        logging.error(f"Forecast error for {ticker_symbol}: {e}")
         return None
 
 
@@ -565,15 +513,11 @@ def analyze_stock(ticker_symbol: str, period="1y"):
 The stock currently reflects a {trend.lower()} structure with {risk_level.lower()} volatility.
 """
     except Exception as e:
-        print("Analyze Error:", e)
+        logging.error(f"Analyze error for {ticker_symbol}: {e}")
         return None
 
 
 def calculate_basic_risk_metrics(ticker, period="1y"):
-    """
-    Returns Volatility, Sharpe Ratio, and Max Drawdown.
-    Results are cached since they're computed from price data.
-    """
     cache_key = _make_key("metrics", ticker, period)
     cached = _cache_get(cache_key, "metrics")
     if cached is not None:
@@ -648,11 +592,7 @@ def _fig_to_png_bytes(fig: go.Figure) -> bytes:
 
 
 def generate_pdf(ticker_symbol: str, period: str = "1y") -> bytes:
-    """
-    Generates a full stock analysis PDF report.
-    Steps: fetch data → convert chart to PNG → build PDF → return bytes.
-    """
-    info        = get_company_info(ticker_symbol)
+    info          = get_company_info(ticker_symbol)
     company_name  = info.get("longName", ticker_symbol)
     sector        = info.get("sector", "N/A")
     current_price = info.get("regularMarketPrice") or info.get("currentPrice", "N/A")
@@ -675,7 +615,7 @@ def generate_pdf(ticker_symbol: str, period: str = "1y") -> bytes:
         try:
             chart_png = _fig_to_png_bytes(chart_fig)
         except Exception as e:
-            print(f"Chart image error: {e}")
+            logging.warning(f"Chart image error: {e}")
 
     pdf = FPDF()
     pdf.add_page()

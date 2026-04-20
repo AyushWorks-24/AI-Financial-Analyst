@@ -1,32 +1,34 @@
-# AI Financial Analyst — Python Dependencies
-# Compatible with Python 3.10 (Hugging Face Spaces)
-# Note: streamlit is installed automatically by Hugging Face
+# AI Financial Analyst — Stable Dependencies
 
 # Data fetching
-yfinance
+yfinance==0.2.40
 gnews==0.4.3
 
 # Data processing
 numpy==1.26.4
 pandas==2.2.3
 
-# Machine Learning (forecast)
+# Machine Learning
 scikit-learn==1.5.2
 
 # Charts
 plotly==5.24.1
 kaleido==0.2.1
 
-# AI Agent
-langchain-core
-langchain-groq
-langgraph
-langgraph-checkpoint
-langgraph-prebuilt
+# AI Agent (LOCKED versions)
+langchain-core==0.2.43
+langchain-groq==0.1.9
+langgraph==0.2.16
+langgraph-checkpoint==2.0.1
+langgraph-prebuilt==0.1.2
 
 # Search
 rapidfuzz==3.10.1
 
 # PDF Export
 fpdf2==2.8.1
-# cache-bust: Sun Mar 22 16:56:29 UTC 2026
+
+# Utility
+requests==2.32.3
+python-dotenv==1.0.1
+tqdm==4.66.5
