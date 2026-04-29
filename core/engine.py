@@ -27,22 +27,22 @@ logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 # Sending browser-like headers significantly reduces the chance of being blocked.
 # We create ONE session and reuse it everywhere — not a new one per call.
 
-def _make_yf_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    })
-    return session
+def _make_yf_session():
+    try:
+        from curl_cffi import requests as curl_requests
+        return curl_requests.Session(impersonate="chrome")
+    except ImportError:
+        # Fallback if curl_cffi not available
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        })
+        return session
 
-# Module-level singleton — created once when engine.py is imported
 _YF_SESSION = _make_yf_session()
 
 
