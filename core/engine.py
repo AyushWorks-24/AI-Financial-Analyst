@@ -12,39 +12,22 @@ import tempfile
 import os
 import sqlite3
 import json
-import hashlib
 import requests
 
 logging.getLogger("prophet").setLevel(logging.WARNING)
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
-
 # ─────────────────────────────────────────
-# SHARED REQUESTS SESSION
+# ALPHA VANTAGE CONFIG
 # ─────────────────────────────────────────
-# Yahoo Finance rate-limits cloud server IPs (HuggingFace, Render, etc.)
-# because they see many requests from the same IP.
-# Sending browser-like headers significantly reduces the chance of being blocked.
-# We create ONE session and reuse it everywhere — not a new one per call.
+AV_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+AV_BASE = "https://www.alphavantage.co/query"
 
-def _make_yf_session():
-    try:
-        from curl_cffi import requests as curl_requests
-        return curl_requests.Session(impersonate="chrome")
-    except ImportError:
-        # Fallback if curl_cffi not available
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-        })
-        return session
-
-_YF_SESSION = _make_yf_session()
-
+# Period string → number of trading days
+PERIOD_DAYS = {
+    "1mo": 30, "3mo": 90, "6mo": 180,
+    "1y": 365, "2y": 730, "5y": 1825
+}
 
 # ─────────────────────────────────────────
 # SQLITE CACHE LAYER
@@ -85,19 +68,14 @@ def _cache_get(cache_key: str, data_type: str):
             (cache_key,)
         ).fetchone()
         conn.close()
-
         if row is None:
             return None
-
         data_json, cached_at = row
         age_seconds = datetime.now().timestamp() - cached_at
         ttl = CACHE_TTL.get(data_type, 60 * 60 * 6)
-
         if age_seconds > ttl:
             return None
-
         return json.loads(data_json)
-
     except Exception:
         return None
 
@@ -118,7 +96,6 @@ def _cache_set(cache_key: str, data_type: str, data):
 
 
 def _cache_get_stale(cache_key: str):
-    """Read from cache ignoring TTL — used as last-resort fallback when API fails."""
     try:
         conn = _get_db()
         row = conn.execute(
@@ -144,7 +121,6 @@ def _cache_stats() -> dict:
             "SELECT MIN(cached_at) FROM cache"
         ).fetchone()[0]
         conn.close()
-
         return {
             "total": total,
             "by_type": dict(by_type),
@@ -166,20 +142,107 @@ def clear_cache():
 
 
 # ─────────────────────────────────────────
-# DATA FETCHING (with cache + session)
+# ALPHA VANTAGE FETCH HELPERS
+# ─────────────────────────────────────────
+
+def _av_fetch_price(ticker_symbol: str) -> pd.DataFrame:
+    """
+    Fetches full daily OHLCV from Alpha Vantage.
+    Uses TIME_SERIES_DAILY — returns up to 20 years of data.
+    Free tier: 25 calls/day.
+    """
+    # Indian stocks: remove .NS/.BO suffix — AV uses BSE: or NSE: prefix style
+    # but for simplicity we strip suffix and try as-is
+    symbol = ticker_symbol.replace(".NS", "").replace(".BO", "")
+
+    params = {
+        "function": "TIME_SERIES_DAILY",
+        "symbol": symbol,
+        "outputsize": "full",
+        "apikey": AV_KEY,
+    }
+    resp = requests.get(AV_BASE, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "Time Series (Daily)" not in data:
+        # Check for error message
+        if "Note" in data:
+            raise Exception("Alpha Vantage rate limit hit (25 calls/day exceeded)")
+        if "Error Message" in data:
+            raise Exception(f"Invalid ticker: {ticker_symbol}")
+        raise Exception(f"Unexpected Alpha Vantage response: {list(data.keys())}")
+
+    ts = data["Time Series (Daily)"]
+    rows = []
+    for date_str, vals in ts.items():
+        rows.append({
+            "Date":   pd.to_datetime(date_str),
+            "Open":   float(vals["1. open"]),
+            "High":   float(vals["2. high"]),
+            "Low":    float(vals["3. low"]),
+            "Close":  float(vals["4. close"]),
+            "Volume": float(vals["5. volume"]),
+        })
+
+    df = pd.DataFrame(rows).set_index("Date").sort_index()
+    return df
+
+
+def _av_fetch_info(ticker_symbol: str) -> dict:
+    """
+    Fetches company overview from Alpha Vantage.
+    Returns dict with keys matching what the rest of engine.py expects.
+    """
+    symbol = ticker_symbol.replace(".NS", "").replace(".BO", "")
+
+    params = {
+        "function": "OVERVIEW",
+        "symbol": symbol,
+        "apikey": AV_KEY,
+    }
+    resp = requests.get(AV_BASE, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not data or "Symbol" not in data:
+        raise Exception(f"No overview data for {ticker_symbol}")
+
+    # Map Alpha Vantage keys → yfinance-style keys that rest of app expects
+    def safe_float(val):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "longName":           data.get("Name", ticker_symbol),
+        "sector":             data.get("Sector", "N/A"),
+        "longBusinessSummary": data.get("Description", ""),
+        "marketCap":          safe_float(data.get("MarketCapitalization")),
+        "forwardPE":          safe_float(data.get("ForwardPE")),
+        "trailingEps":        safe_float(data.get("EPS")),
+        "fiftyTwoWeekHigh":   safe_float(data.get("52WeekHigh")),
+        "fiftyTwoWeekLow":    safe_float(data.get("52WeekLow")),
+        "dividendYield":      safe_float(data.get("DividendYield")),
+        "regularMarketPrice": safe_float(data.get("50DayMovingAverage")),  # best proxy available
+    }
+
+
+# ─────────────────────────────────────────
+# DATA FETCHING (Alpha Vantage + cache)
 # ─────────────────────────────────────────
 
 def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None):
     """
     Fetches OHLCV price data with SQLite caching.
-
-    Uses a shared requests.Session with browser headers to reduce
-    the chance of Yahoo Finance rate-limiting cloud server IPs.
+    Primary source: Alpha Vantage API.
+    Falls back to stale cache if API fails.
 
     Returns (DataFrame, is_stale):
-    - is_stale=False → fresh data (from cache or live fetch)
-    - is_stale=True  → fallback to expired cache because API failed
-    - empty DataFrame → complete failure, no cache available
+    - is_stale=False → fresh data
+    - is_stale=True  → fallback stale cache
+    - empty DataFrame → complete failure
     """
     if start_date and end_date:
         cache_key = _make_key("price", ticker_symbol, str(start_date), str(end_date))
@@ -193,51 +256,43 @@ def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None)
         df.index = pd.to_datetime(cached["index"])
         return df, False
 
-    # 2. Cache miss — try live fetch with session
+    # 2. Cache miss — fetch from Alpha Vantage
     try:
-        if start_date and end_date:
-            data = yf.download(
-                ticker_symbol,
-                start=start_date,
-                end=end_date,
-                progress=False,
-                auto_adjust=False,
-                session=_YF_SESSION,
-            )
-        else:
-            data = yf.download(
-                ticker_symbol,
-                period=period,
-                progress=False,
-                auto_adjust=False,
-                session=_YF_SESSION,
-            )
+        df = _av_fetch_price(ticker_symbol)
 
-        if not data.empty:
+        # Filter by date range or period
+        if start_date and end_date:
+            df = df[str(start_date):str(end_date)]
+        elif period:
+            days = PERIOD_DAYS.get(period, 365)
+            cutoff = datetime.today() - timedelta(days=days)
+            df = df[df.index >= cutoff]
+
+        if not df.empty:
             _cache_set(cache_key, "price", {
-                "data": data.to_dict(),
-                "index": [str(i) for i in data.index]
+                "data": df.to_dict(),
+                "index": [str(i) for i in df.index]
             })
-            return data, False
+            return df, False
 
     except Exception as e:
-        logging.warning(f"yfinance fetch failed for {ticker_symbol}: {e}")
+        logging.warning(f"Alpha Vantage fetch failed for {ticker_symbol}: {e}")
 
-    # 3. Live fetch failed — try stale cache as fallback
+    # 3. Stale cache fallback
     stale = _cache_get_stale(cache_key)
     if stale:
         df = pd.DataFrame(stale["data"])
         df.index = pd.to_datetime(stale["index"])
-        return df, True  # is_stale=True tells UI to show warning banner
+        return df, True
 
-    return pd.DataFrame(), False  # complete failure
+    return pd.DataFrame(), False
 
 
 def get_company_info(ticker_symbol: str) -> dict:
     """
     Fetches company info with SQLite caching.
-    Uses shared session to reduce rate-limit risk.
-    Falls back to stale cache if API call fails.
+    Primary source: Alpha Vantage OVERVIEW endpoint.
+    Falls back to stale cache if API fails.
     """
     cache_key = _make_key("info", ticker_symbol)
 
@@ -246,37 +301,20 @@ def get_company_info(ticker_symbol: str) -> dict:
     if cached is not None:
         return cached
 
-    # 2. Live fetch with session
+    # 2. Live fetch from Alpha Vantage
     try:
-        stock = yf.Ticker(ticker_symbol, session=_YF_SESSION)
-        info = stock.info
-
-        if not info or len(info) < 5:
-            # Empty info dict — ticker might be wrong format for Indian stocks
-            if not ticker_symbol.endswith(".NS") and not ticker_symbol.endswith(".BO"):
-                return get_company_info(f"{ticker_symbol}.NS")
-
-        # Sanitize: only cache JSON-serializable values
-        safe_info = {}
-        for k, v in info.items():
-            try:
-                json.dumps(v)
-                safe_info[k] = v
-            except (TypeError, ValueError):
-                safe_info[k] = str(v)
-
-        _cache_set(cache_key, "info", safe_info)
-        return safe_info
-
+        info = _av_fetch_info(ticker_symbol)
+        _cache_set(cache_key, "info", info)
+        return info
     except Exception as e:
-        logging.warning(f"yfinance info fetch failed for {ticker_symbol}: {e}")
+        logging.warning(f"Alpha Vantage info fetch failed for {ticker_symbol}: {e}")
 
     # 3. Stale cache fallback
     stale = _cache_get_stale(cache_key)
     if stale:
         return stale
 
-    return {"error": f"Could not fetch data for {ticker_symbol}. Yahoo Finance may be rate-limiting."}
+    return {"error": f"Could not fetch data for {ticker_symbol}."}
 
 
 def fetch_forecast_data(ticker_symbol):
