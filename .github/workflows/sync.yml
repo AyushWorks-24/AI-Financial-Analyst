@@ -6,7 +6,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Push to HuggingFace
@@ -14,4 +14,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git remote add hf https://ayush1609:$HF_TOKEN@huggingface.co/spaces/ayush1609/AI-Financial-Analyst
+          git filter-branch --force --index-filter \
+            'git rm -r --cached --ignore-unmatch Screenshots/' \
+            --prune-empty --tag-name-filter cat -- --all
           git push hf main --force
