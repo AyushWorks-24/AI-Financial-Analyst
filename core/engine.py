@@ -32,7 +32,7 @@ PERIOD_DAYS = {
 # ─────────────────────────────────────────
 # SQLITE CACHE LAYER
 # ─────────────────────────────────────────
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "cache.db")
+DB_PATH = "/tmp/cache.db"
 
 CACHE_TTL = {
     "price":   60 * 60 * 6,   # 6 hours
