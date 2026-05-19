@@ -7,28 +7,21 @@ import logging
 from sklearn.linear_model import LinearRegression
 import numpy as np
 from fpdf import FPDF
-import io
 import tempfile
 import os
 import sqlite3
 import json
 import requests
+from curl_cffi import requests as curl_requests
 
 logging.getLogger("prophet").setLevel(logging.WARNING)
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
 # ─────────────────────────────────────────
-# SHARED SESSION (browser-like headers to avoid yfinance rate limiting on cloud IPs)
+# SHARED SESSION (curl_cffi impersonates real Chrome at TLS level)
+# Bypasses Yahoo Finance rate limiting on cloud IPs like HuggingFace/AWS
 # ─────────────────────────────────────────
-_SESSION = requests.Session()
-_SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-})
+_SESSION = curl_requests.Session(impersonate="chrome110")
 
 PERIOD_DAYS = {
     "1mo": 30, "3mo": 90, "6mo": 180,
@@ -153,8 +146,9 @@ def clear_cache():
 
 def _yf_fetch_price(ticker_symbol: str, period=None, start_date=None, end_date=None) -> pd.DataFrame:
     """
-    Fetches OHLCV from yfinance using a shared session with browser-like headers
-    to avoid rate limiting on cloud IPs (HuggingFace Spaces, Render, etc.)
+    Fetches OHLCV from yfinance using curl_cffi session.
+    curl_cffi impersonates Chrome at the TLS level — bypasses Yahoo Finance
+    cloud IP blocks that reject plain requests.Session headers.
     """
     ticker = yf.Ticker(ticker_symbol, session=_SESSION)
 
@@ -166,29 +160,23 @@ def _yf_fetch_price(ticker_symbol: str, period=None, start_date=None, end_date=N
     if df.empty:
         raise Exception(f"yfinance returned empty data for {ticker_symbol}")
 
-    # Normalize column names
     df.index = pd.to_datetime(df.index)
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
 
-    # Keep only OHLCV columns
     keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
     return df[keep]
 
 
 def _yf_fetch_info(ticker_symbol: str) -> dict:
     """
-    Fetches company overview from yfinance.
-    Returns dict with standard keys used throughout engine.py.
+    Fetches company overview from yfinance using curl_cffi session.
     """
     ticker = yf.Ticker(ticker_symbol, session=_SESSION)
 
-    # .fast_info is lighter and less likely to get rate limited
     try:
-        fast = ticker.fast_info
-        info = ticker.info  # full info for fundamentals
+        info = ticker.info
     except Exception:
-        fast = {}
         info = {}
 
     def safe_get(d, key, fallback=None):
@@ -214,43 +202,28 @@ def _yf_fetch_info(ticker_symbol: str) -> dict:
 # ─────────────────────────────────────────
 
 def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None):
-    """
-    Fetches OHLCV price data with SQLite caching.
-    Primary source: yfinance (with session headers).
-    Falls back to stale cache if API fails.
-
-    Returns (DataFrame, is_stale):
-    - is_stale=False → fresh data
-    - is_stale=True  → fallback stale cache
-    - empty DataFrame → complete failure
-    """
     if start_date and end_date:
         cache_key = _make_key("price", ticker_symbol, str(start_date), str(end_date))
     else:
         cache_key = _make_key("price", ticker_symbol, period or "1y")
 
-    # 1. Try fresh cache
     cached = _cache_get(cache_key, "price")
     if cached is not None:
         df = pd.DataFrame(cached["data"])
         df.index = pd.to_datetime(cached["index"])
         return df, False
 
-    # 2. Cache miss — fetch from yfinance
     try:
         df = _yf_fetch_price(ticker_symbol, period=period, start_date=start_date, end_date=end_date)
-
         if not df.empty:
             _cache_set(cache_key, "price", {
                 "data": df.to_dict(),
                 "index": [str(i) for i in df.index]
             })
             return df, False
-
     except Exception as e:
         logging.warning(f"yfinance fetch failed for {ticker_symbol}: {e}")
 
-    # 3. Stale cache fallback
     stale = _cache_get_stale(cache_key)
     if stale:
         df = pd.DataFrame(stale["data"])
@@ -261,19 +234,12 @@ def fetch_price_data(ticker_symbol, period=None, start_date=None, end_date=None)
 
 
 def get_company_info(ticker_symbol: str) -> dict:
-    """
-    Fetches company info with SQLite caching.
-    Primary source: yfinance.
-    Falls back to stale cache if API fails.
-    """
     cache_key = _make_key("info", ticker_symbol)
 
-    # 1. Fresh cache
     cached = _cache_get(cache_key, "info")
     if cached is not None:
         return cached
 
-    # 2. Live fetch from yfinance
     try:
         info = _yf_fetch_info(ticker_symbol)
         _cache_set(cache_key, "info", info)
@@ -281,7 +247,6 @@ def get_company_info(ticker_symbol: str) -> dict:
     except Exception as e:
         logging.warning(f"yfinance info fetch failed for {ticker_symbol}: {e}")
 
-    # 3. Stale cache fallback
     stale = _cache_get_stale(cache_key)
     if stale:
         return stale
@@ -290,7 +255,6 @@ def get_company_info(ticker_symbol: str) -> dict:
 
 
 def fetch_forecast_data(ticker_symbol):
-    """Forecast uses 2 years of data — cached separately."""
     end_date = datetime.today()
     start_date = end_date - timedelta(days=730)
     df, _ = fetch_price_data(
@@ -302,7 +266,7 @@ def fetch_forecast_data(ticker_symbol):
 
 
 # ─────────────────────────────────────────
-# FEATURE FUNCTIONS (unchanged from your original)
+# FEATURE FUNCTIONS
 # ─────────────────────────────────────────
 
 def get_news(ticker_symbol: str) -> str:
@@ -386,10 +350,6 @@ def get_stock_price_chart(ticker_symbol: str, period="1y", start_date=None, end_
 
 
 def get_price_forecast(ticker_symbol: str):
-    """
-    14-day price forecast using Linear Regression.
-    Features: day index + 7-day and 21-day moving averages.
-    """
     try:
         df = fetch_forecast_data(ticker_symbol)
         if df is None or df.empty or len(df) < 60:
@@ -446,7 +406,6 @@ def get_price_forecast(ticker_symbol: str):
             name="Historical",
             line=dict(color="#00c6ff", width=2)
         ))
-
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=forecast_arr,
@@ -454,7 +413,6 @@ def get_price_forecast(ticker_symbol: str):
             name="Forecast",
             line=dict(color="#7f5af0", width=2, dash="dash")
         ))
-
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=upper,
@@ -462,7 +420,6 @@ def get_price_forecast(ticker_symbol: str):
             line=dict(width=0),
             showlegend=False
         ))
-
         fig.add_trace(go.Scatter(
             x=forecast_dates,
             y=lower,
@@ -472,7 +429,6 @@ def get_price_forecast(ticker_symbol: str):
             line=dict(width=0),
             name="95% Confidence"
         ))
-
         fig.update_layout(
             title=f"14-Day Price Forecast — {ticker_symbol}",
             xaxis_title="Date",
