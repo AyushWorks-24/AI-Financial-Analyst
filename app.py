@@ -125,7 +125,7 @@ if ticker:
     # Yahoo Finance returned YFRateLimitError from a cloud IP.
     # Now it fails gracefully and shows a warning instead.
     try:
-        from core.engine import _YF_SESSION
+        from core.engine import _SESSION as _YF_SESSION
         stock = yf.Ticker(ticker, session=_YF_SESSION)
         hist = stock.history(period="2d")
     except Exception:
@@ -316,7 +316,7 @@ with tab2:
         # stock_obj.info was a raw yfinance call with no error handling.
         # Now it falls back to an empty dict so the rest of the tab still renders.
         try:
-            from core.engine import _YF_SESSION
+            from core.engine import _SESSION as _YF_SESSION
             stock_obj = yf.Ticker(ticker, session=_YF_SESSION)
             info = stock_obj.info
         except Exception:
