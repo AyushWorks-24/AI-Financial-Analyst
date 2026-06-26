@@ -1,253 +1,368 @@
 ---
+
 title: AI Financial Analyst
 emoji: 📈
 colorFrom: blue
 colorTo: purple
 sdk: streamlit
 sdk_version: "1.40.0"
-python_version: "3.10"
+python_version: "3.11"
 app_file: app.py
 pinned: false
----
+-------------
 
 <div align="center">
 
 # 📈 AI Financial Analyst
 
-[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-HuggingFace_Spaces-00FFEA?style=for-the-badge)](https://huggingface.co/spaces/ayush1609/AI-Financial-Analyst)
-[![GitHub](https://img.shields.io/badge/GitHub-AyushWorks--24-black?style=for-the-badge&logo=github)](https://github.com/AyushWorks-24/AI-Financial-Analyst)
-[![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)]()
-[![Streamlit](https://img.shields.io/badge/Streamlit-Deployed-ff4b4b?style=for-the-badge&logo=streamlit)]()
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
+### AI-Powered Stock Analysis Platform with Live Market Data, Forecasting, Portfolio Analytics & Conversational AI
 
-> **A full-stack AI stock analysis platform — live market data, ML forecasting, backtesting, portfolio tracking, PDF export, and a conversational AI agent. All in one dashboard.**
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-HuggingFace_Spaces-00FFEA?style=for-the-badge)](https://huggingface.co/spaces/ayush1609/AI-Financial-Analyst)
+[![GitHub](https://img.shields.io/badge/GitHub-AyushWorks--24-black?style=for-the-badge\&logo=github)](https://github.com/AyushWorks-24/AI-Financial-Analyst)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue?style=for-the-badge\&logo=python)]()
+[![Streamlit](https://img.shields.io/badge/Streamlit-App-ff4b4b?style=for-the-badge\&logo=streamlit)]()
+[![License](https://img.shields.io/badge/License-MIT-success?style=for-the-badge)]()
+
+**Analyze stocks like a financial analyst using real-time market data, AI-powered insights, forecasting, portfolio comparison, and an intelligent financial assistant — all from one interactive dashboard.**
 
 </div>
 
 ---
 
-## 🧠 What Is This?
+# ✨ Features
 
-AI Financial Analyst gives retail investors access to professional-grade stock analysis tools — combining live market data, machine learning forecasting, interactive backtesting, and a LangGraph ReAct AI agent that can answer financial questions using real tools.
+* 📊 **Real-Time Stock Analysis**
 
-Built end-to-end solo: data pipeline → ML model → AI agent → deployed on HuggingFace Spaces.
+  * Interactive candlestick charts
+  * Moving averages
+  * Daily returns
+  * Volatility
+  * Sharpe Ratio
+  * Performance metrics
 
-## ✨ Features
+* 📈 **Financial Fundamentals**
 
-| Feature | Description |
-|---|---|
-| 📊 **Live Analysis** | Candlestick charts, SMA-based trend detection, volatility & Sharpe Ratio |
-| 📈 **Fundamentals** | P/E ratio, EPS, market cap, 52W high/low, sector info |
-| 📰 **News Feed** | Real-time financial news fetched from Google News |
-| 🤖 **AI Forecast** | 14-day price prediction using Facebook Prophet |
-| 📉 **Backtest** | Interactive MA crossover strategy vs Buy & Hold with live sliders |
-| 💬 **AI Chat Agent** | Conversational agent powered by llama3.2 via Ollama + LangGraph |
-| 📂 **Portfolio Tracker** | Compare up to 8 stocks with normalized charts & correlation heatmap |
-| 📤 **Export Center** | Download full PDF reports with charts + CSV data exports |
-| 🔍 **Smart Search** | Search by company name ("Apple") or ticker ("AAPL") across 4800+ stocks |
-| 🗄️ **SQLite Cache** | Local caching layer — faster repeat loads + offline fallback |
+  * Market Capitalization
+  * P/E Ratio
+  * EPS
+  * Dividend Yield
+  * 52 Week High/Low
+  * Sector & Industry information
+
+* 🤖 **AI Financial Assistant**
+
+  * Powered by **LangGraph ReAct Agent**
+  * Uses **Groq Llama-3.3-70B**
+  * Answers financial questions
+  * Uses real analytical tools instead of simple prompting
+
+* 📉 **Price Forecasting**
+
+  * Machine Learning based forecasting
+  * Linear Regression with Moving Average features
+  * 14-day future price estimation
+  * Interactive forecast visualization
+
+* 📰 **Financial News**
+
+  * Live news powered by Google News
+  * Company-specific headlines
+  * Quick market updates
+
+* 📂 **Portfolio Tracker**
+
+  * Compare multiple stocks
+  * Portfolio normalization
+  * Correlation heatmap
+  * Performance comparison
+
+* 📤 **Export Center**
+
+  * Professional PDF reports
+  * CSV export
+  * Chart export
+
+* 🔍 **Smart Search**
+
+  * Search by ticker or company name
+  * 4800+ supported stocks
+  * Fuzzy search using RapidFuzz
+
+* ⚡ **SQLite Intelligent Cache**
+
+  * 6-hour price cache
+  * 24-hour company cache
+  * Faster loading
+  * Offline fallback when Yahoo Finance is unavailable
 
 ---
 
-## 🖥️ Screenshots
+# 🖼️ Screenshots
 
-### 📊 Analysis Tab
-![Analysis](screenshots/analysis.png)
+## Dashboard
 
-### 📂 Portfolio Tracker
-![Portfolio](screenshots/portfolio.png)
-
-### 🤖 AI Forecast
-![Forecast](screenshots/forecast.png)
-
-### 💬 AI Chat
-![Chat](screenshots/chat.png)
+![Analysis](Screenshots/analysis.png)
 
 ---
 
-## 🏗️ Project Structure
+## Portfolio Tracker
+
+![Portfolio](Screenshots/portfolio.png)
+
+---
+
+## Forecast
+
+![Forecast](Screenshots/forecast.png)
+
+---
+
+## AI Assistant
+
+![Chat](Screenshots/chat.png)
+
+---
+
+# 🏗️ Architecture
 
 ```
-AI-Financial-Analyst/
+                 User
+                  │
+                  ▼
+          Streamlit Dashboard
+                  │
+        ┌─────────┴─────────┐
+        │                   │
+        ▼                   ▼
+Financial Engine      LangGraph AI Agent
+        │                   │
+        │                   ▼
+        │           Groq Llama-3.3-70B
+        │
+        ▼
+SQLite Cache Layer
+        │
+        ▼
+ Yahoo Finance API
+        │
+        ▼
+ Interactive Charts
+ PDF Reports
+ CSV Export
+```
+
+---
+
+# ⚙️ Tech Stack
+
+| Layer            | Technology                       |
+| ---------------- | -------------------------------- |
+| Frontend         | Streamlit                        |
+| Backend          | Python                           |
+| AI Agent         | LangGraph + LangChain            |
+| LLM              | Groq (Llama-3.3-70B Versatile)   |
+| Machine Learning | Scikit-Learn (Linear Regression) |
+| Data Source      | Yahoo Finance                    |
+| News             | Google News                      |
+| Database         | SQLite                           |
+| Charts           | Plotly                           |
+| PDF Reports      | FPDF2 + Kaleido                  |
+| Search           | RapidFuzz                        |
+
+---
+
+# 📂 Project Structure
+
+```
+AI-Financial-Analyst
 │
-├── app.py                  # Main Streamlit application
+├── app.py
+├── requirements.txt
+├── README.md
 │
 ├── core/
-│   ├── __init__.py
-│   ├── engine.py           # Data fetching, analysis, caching, PDF generation
-│   └── agent.py            # LangGraph ReAct agent + Ollama integration
+│   ├── engine.py
+│   ├── agent.py
+│   └── __init__.py
 │
 ├── data/
-│   └── tickers.csv         # 4800+ stock tickers with company names
+│   └── tickers.csv
 │
 ├── ui/
-│   └── style.css           # Custom dark theme CSS
+│   └── style.css
 │
-├── requirements.txt        # Python dependencies
-└── README.md
+├── Screenshots/
+│
+└── .streamlit/
 ```
 
 ---
 
-## ⚙️ Tech Stack
+# 🚀 Getting Started
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | Streamlit |
-| **Backend** | Python 3.10+ |
-| **AI Agent** | LangGraph + Ollama (llama3.2) |
-| **Forecasting** | Linear Regression |
-| **Database** | SQLite (via Python's built-in `sqlite3`) |
-| **Data Source** | yfinance (Yahoo Finance API) |
-| **Charts** | Plotly |
-| **PDF Export** | fpdf2 + kaleido |
-| **Search** | RapidFuzz (fuzzy matching) |
-| **News** | GNews |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Python 3.10+
-- [Ollama](https://ollama.com) installed and running
-- llama3.2 model pulled
-
-### 1. Clone the repository
+## Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/AI-Financial-Analyst.git
+git clone https://github.com/AyushWorks-24/AI-Financial-Analyst.git
+
 cd AI-Financial-Analyst
 ```
 
-### 2. Create a virtual environment
+---
+
+## Create Virtual Environment
 
 ```bash
 python -m venv .venv
+```
 
-# Windows
+Windows
+
+```bash
 .venv\Scripts\activate
+```
 
-# Mac/Linux
+Linux / macOS
+
+```bash
 source .venv/bin/activate
 ```
 
-### 3. Install dependencies
+---
+
+## Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Pull the AI model
+---
 
-```bash
-ollama pull llama3.2
+## Configure API Key
+
+Create
+
+```
+.streamlit/secrets.toml
 ```
 
-### 5. Run the app
+Add
+
+```toml
+GROQ_API_KEY="YOUR_GROQ_API_KEY"
+```
+
+---
+
+## Run
 
 ```bash
 streamlit run app.py
 ```
 
-The app will open at `http://localhost:8501`
-
 ---
 
-## 📦 Requirements
-
-Create a `requirements.txt` with the following:
-
-```
-streamlit
-yfinance
-plotly
-pandas
-numpy
-prophet
-langchain-ollama
-langchain-core
-langgraph
-gnews
-rapidfuzz
-fpdf2
-kaleido
-```
-
----
-
-## 🗄️ How Data Works
-
-This app uses a **two-layer data architecture:**
+# 📊 Cache Strategy
 
 ```
 User Request
-     ↓
+      │
+      ▼
 Check SQLite Cache
-     ↓
-Fresh? → Return cached data instantly
-Expired? → Fetch from Yahoo Finance API → Save to cache → Return
-API Down? → Return stale cache with warning banner
-```
+      │
+      ├─────────────► Fresh
+      │                 │
+      │                 ▼
+      │          Return Cached Data
+      │
+      ▼
+Expired
+      │
+      ▼
+Yahoo Finance
+      │
+      ▼
+Save to Cache
+      │
+      ▼
+Return Latest Data
 
-- **Price data** cached for 6 hours
-- **Company info** cached for 24 hours
-- **News** always fetched live (real-time only)
-- Cache stored locally as `cache.db` (auto-created on first run)
+If Yahoo fails
+
+↓
+
+Return Cached Data
+```
 
 ---
 
-## 🤖 AI Agent Architecture
-
-The AI Chat tab uses a **ReAct (Reasoning + Acting)** agent pattern:
+# 🤖 AI Agent Workflow
 
 ```
 User Question
-     ↓
-LangGraph ReAct Agent (llama3.2)
-     ↓
-Decides which tool to call
-     ↓
-┌─────────────────────────────────┐
-│  get_stock_price_chart          │
-│  get_fundamental_data           │
-│  get_price_forecast             │
-│  get_company_info               │
-│  calculate_basic_risk_metrics   │
-└─────────────────────────────────┘
-     ↓
-Synthesizes tool results into a response
-     ↓
-Answer displayed in chat
+
+↓
+
+LangGraph ReAct Agent
+
+↓
+
+Chooses Appropriate Tool
+
+↓
+
+Stock Analysis
+Company Fundamentals
+Risk Metrics
+Forecast
+News
+
+↓
+
+Groq Llama-3.3-70B
+
+↓
+
+Final AI Response
 ```
 
 ---
 
-## ⚠️ Disclaimer
+# 💡 Highlights
 
-This application is built for **educational purposes only**. The AI forecasts and analysis provided are generated by statistical models and do **not** constitute financial advice. Always consult a certified financial advisor before making investment decisions.
-
----
-
-## 🔭 Future Scope
-
-- ⚡ Already deployed on HuggingFace Spaces with Groq API for cloud inference
-- 🔐 User authentication and personal watchlists
-- 📊 Sentiment analysis from news headlines
-- 🌐 Expand to crypto and forex markets
-- 📱 Mobile-responsive UI improvements
+* Modular architecture
+* Intelligent caching
+* Live market data
+* AI-powered financial assistant
+* Machine learning forecasting
+* Portfolio analytics
+* Professional PDF generation
+* Responsive Streamlit interface
+* Production-ready deployment
 
 ---
 
-## 👨‍💻 Author
+# ⚠️ Disclaimer
 
-**Ayush** — B.Tech AI & ML, Oriental College of Technology, Bhopal
+This application is developed **for educational purposes only**.
 
-[![GitHub](https://img.shields.io/badge/GitHub-AyushWorks--24-black?style=flat-square&logo=github)](https://github.com/AyushWorks-24)
+The generated forecasts, AI responses, and financial analytics should **not** be considered investment advice. Always perform your own research before making financial decisions.
 
 ---
 
-## 📄 License
+# 👨‍💻 Author
 
-This project is licensed under the MIT License — feel free to use and modify it.
+**Ayush**
+
+B.Tech Artificial Intelligence & Machine Learning
+
+Oriental College of Technology, Bhopal
+
+GitHub:
+https://github.com/AyushWorks-24
+
+---
+
+# ⭐ If you like this project
+
+Give this repository a ⭐ on GitHub!

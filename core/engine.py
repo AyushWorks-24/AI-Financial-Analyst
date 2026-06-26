@@ -1,732 +1,591 @@
-import streamlit as st
+"""
+core/engine.py
+──────────────
+Data fetching, caching, analysis, forecasting, and PDF generation.
+All yfinance calls use curl_cffi with Chrome impersonation to avoid
+rate-limiting on cloud IPs (Render, etc.).
+Cache: SQLite at /tmp/cache.db — 6hr TTL for price data, 24hr for company info.
+"""
 
-from core.engine import (
-    get_stock_price_chart,
-    get_news,
-    get_fundamental_data,
-    get_price_forecast,
-    analyze_stock,
-    calculate_basic_risk_metrics,
-    ma_crossover_backtest,
-    generate_pdf,
-    fetch_price_data,
-    _cache_stats,
-    clear_cache,
-    _SESSION,
-)
-from datetime import date
 import os
-import plotly.graph_objects as go
-import pandas as pd
-from rapidfuzz import process, fuzz
-import yfinance as yf
+import sqlite3
+import json
+import time
+import traceback
+from datetime import datetime, timedelta
+
 import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-st.set_page_config(
-    page_title="AI Financial Analyst",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ── yfinance with curl_cffi to avoid Yahoo Finance rate-limiting on cloud IPs ──
+try:
+    from curl_cffi import requests as cffi_requests
+    _SESSION = cffi_requests.Session(impersonate="chrome")
+except Exception:
+    _SESSION = None
 
-# ─────────────────────────────────────────
-# Load Custom CSS
-# ─────────────────────────────────────────
+import yfinance as yf
 
-def load_css():
-    css_path = os.path.join("ui", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+# ── Cache config ──
+_CACHE_DB = os.environ.get("CACHE_DB_PATH", "/tmp/cache.db")
+_TTL_PRICE = 6 * 3600       # 6 hours for price data
+_TTL_INFO  = 24 * 3600      # 24 hours for company info
 
-load_css()
-
-# ─────────────────────────────────────────
-# NAVBAR
-# ─────────────────────────────────────────
-
-st.markdown("""
-<div class="navbar">
-  <div class="nav-title">📊 AI Financial Analyst</div>
-  <div class="nav-items">
-    <span>Analysis</span>
-    <span>Forecast</span>
-    <span>Backtest</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────
-# Sidebar Controls
+# CACHE LAYER
 # ─────────────────────────────────────────
 
-@st.cache_data
-def load_tickers():
-    path = os.path.join("data", "tickers.csv")
-    df = pd.read_csv(path)
-    df["Ticker"] = df["Ticker"].str.upper()
-    return df
+def _get_conn():
+    conn = sqlite3.connect(_CACHE_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cache (
+            key       TEXT PRIMARY KEY,
+            value     TEXT,
+            cached_at REAL
+        )
+    """)
+    conn.commit()
+    return conn
 
-tickers_df = load_tickers()
-ticker_list = tickers_df["Ticker"].tolist()
 
-search_query = st.sidebar.text_input("🔍 Search Stock", placeholder="Type ticker...")
-
-ticker = None
-if search_query and len(search_query) >= 2:
-    contains_matches = [t for t in ticker_list if search_query.upper() in t]
-    fuzzy_matches = process.extract(search_query.upper(), ticker_list, scorer=fuzz.WRatio, limit=10)
-    fuzzy_only = [match[0] for match in fuzzy_matches if match[1] > 70]
-    combined = list(dict.fromkeys(contains_matches + fuzzy_only))[:15]
-    if combined:
-        ticker = st.sidebar.selectbox("Select Stock", combined)
-    else:
-        st.sidebar.warning("No matching tickers found.")
-else:
-    st.sidebar.info("Type at least 2 letters")
-
-period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
-
-use_date_filter = st.sidebar.checkbox("Use Custom Date Range")
-start_date, end_date = None, None
-if use_date_filter:
-    start_date = st.sidebar.date_input("Start Date", date(2024, 1, 1))
-    end_date   = st.sidebar.date_input("End Date", date.today())
-
-# ── Cache Status Panel ──
-st.sidebar.markdown("---")
-st.sidebar.markdown("#### 🗄️ Data Cache")
-stats = _cache_stats()
-if stats["total"] > 0:
-    st.sidebar.markdown(
-        f"<small style='color:#8b949e;'>"
-        f"📦 {stats['total']} records cached<br>"
-        f"🕐 Oldest: {stats['oldest']}"
-        f"</small>",
-        unsafe_allow_html=True
-    )
-    if st.sidebar.button("🗑️ Clear Cache", use_container_width=True):
-        if clear_cache():
-            st.sidebar.success("Cache cleared!")
-            st.rerun()
-else:
-    st.sidebar.markdown(
-        "<small style='color:#484f58;'>No cache yet — data will be<br>"
-        "cached on first load for faster repeat visits.</small>",
-        unsafe_allow_html=True
-    )
-
-# ─────────────────────────────────────────
-# LIVE PRICE HEADER
-# ─────────────────────────────────────────
-
-if ticker:
+def _cache_get(key: str, ttl: int):
     try:
-        stock = yf.Ticker(ticker, session=_SESSION)
-        hist = stock.history(period="2d")
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT value, cached_at FROM cache WHERE key = ?", (key,)
+        ).fetchone()
+        conn.close()
+        if row and (time.time() - row[1]) < ttl:
+            return json.loads(row[0])
     except Exception:
-        hist = pd.DataFrame()
+        pass
+    return None
 
-    if not hist.empty:
-        price      = hist["Close"].iloc[-1]
-        prev_price = hist["Close"].iloc[-2] if len(hist) >= 2 else price
-        change     = price - prev_price
-        change_pct = (change / prev_price) * 100
-        arrow = "▲" if change >= 0 else "▼"
-        color = "#00c6ff" if change >= 0 else "#ff4d4d"
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown(f"""
-            <div class="stock-header">
-              <h2>{ticker}</h2>
-              <div class="price">${price:.2f}
-                <span style="font-size:1rem; color:{color}; margin-left:12px;">
-                  {arrow} {change:+.2f} ({change_pct:+.2f}%)
-                </span>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="stock-header">
-          <h2>{ticker}</h2>
-          <div class="price" style="color:#8b949e; font-size:0.9rem;">
-            ⚠️ Live price unavailable (Yahoo Finance rate limit). Cached data will still load below.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+def _cache_set(key: str, value):
+    try:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO cache (key, value, cached_at) VALUES (?, ?, ?)",
+            (key, json.dumps(value, default=str), time.time())
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
-# ─────────────────────────────────────────
-# TABS
-# ─────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📊 Analysis",
-    "📈 Fundamentals",
-    "📰 News",
-    "🤖 Forecast",
-    "📉 Backtest",
-    "💬 AI Chat",
-    "📂 Portfolio",
-    "📤 Export",
-])
+def _cache_stats():
+    try:
+        conn = _get_conn()
+        row = conn.execute("SELECT COUNT(*), MIN(cached_at) FROM cache").fetchone()
+        conn.close()
+        total = row[0] or 0
+        oldest = (
+            datetime.fromtimestamp(row[1]).strftime("%Y-%m-%d %H:%M")
+            if row[1] else "—"
+        )
+        return {"total": total, "oldest": oldest}
+    except Exception:
+        return {"total": 0, "oldest": "—"}
+
+
+def clear_cache():
+    try:
+        conn = _get_conn()
+        conn.execute("DELETE FROM cache")
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
 
 # ─────────────────────────────────────────
-# TAB 1 — Analysis
+# DATA FETCHING
 # ─────────────────────────────────────────
 
-with tab1:
-    if not ticker:
-        st.info("👈 Search and select a stock from the sidebar to get started.")
-    else:
-        fig, is_stale = get_stock_price_chart(ticker, period, start_date, end_date)
-        if is_stale:
-            st.warning("⚠️ Showing cached data — Yahoo Finance is currently unreachable.")
-        if fig:
-            fig.update_layout(
-                template="plotly_dark",
-                hovermode="closest",
-                hoverlabel=dict(bgcolor="#1c2331", font_size=14, font_color="white")
-            )
-            st.plotly_chart(fig, use_container_width=True)
+def fetch_price_data(ticker: str, period: str = "1y",
+                     start=None, end=None):
+    """
+    Returns (DataFrame, is_stale).
+    is_stale=True means we returned cached data because live fetch failed.
+    """
+    cache_key = f"price:{ticker}:{period}:{start}:{end}"
+    cached = _cache_get(cache_key, _TTL_PRICE)
 
-            raw_df, _ = fetch_price_data(ticker, period, start_date, end_date)
-            if not raw_df.empty:
-                if isinstance(raw_df.columns, pd.MultiIndex):
-                    raw_df.columns = raw_df.columns.get_level_values(0)
-                csv = raw_df.reset_index().to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="⬇️ Download Price Data (CSV)",
-                    data=csv,
-                    file_name=f"{ticker}_price_{period}.csv",
-                    mime="text/csv",
-                )
+    try:
+        kwargs = dict(progress=False)
+        if _SESSION:
+            kwargs["session"] = _SESSION
+        if start and end:
+            kwargs["start"] = str(start)
+            kwargs["end"]   = str(end)
         else:
-            st.warning("Could not load price chart.")
+            kwargs["period"] = period
 
-        _df2, _ = fetch_price_data(ticker, period="1y")
-        if _df2 is not None and not _df2.empty:
-            if isinstance(_df2.columns, pd.MultiIndex):
-                _df2.columns = _df2.columns.get_level_values(0)
-            if "Close" in _df2.columns and len(_df2) >= 50:
-                _close   = _df2["Close"].dropna()
-                _returns = _close.pct_change().dropna()
-                _price_val = float(_close.iloc[-1])
-                _sma20     = float(_close.rolling(20).mean().iloc[-1])
-                _sma50     = float(_close.rolling(50).mean().iloc[-1])
-                _vol       = float(_returns.std() * np.sqrt(252))
+        df = yf.download(ticker, **kwargs)
 
-                if _price_val > _sma20 and _sma20 > _sma50:
-                    _trend, _trend_cls = "Uptrend", "green"
-                elif _price_val < _sma20 and _sma20 < _sma50:
-                    _trend, _trend_cls = "Downtrend", "red"
-                else:
-                    _trend, _trend_cls = "Sideways", "purple"
+        if df is None or df.empty:
+            raise ValueError("Empty dataframe returned")
 
-                _risk     = "High" if _vol > 0.4 else ("Medium" if _vol > 0.25 else "Low")
-                _risk_cls = "red" if _risk == "High" else ("cyan" if _risk == "Medium" else "green")
+        # Flatten MultiIndex columns if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-                st.markdown(f"""
-                <div class="section-card">
-                  <div style="font-size:0.82rem; font-weight:600;
-                       color:var(--text-secondary); text-transform:uppercase;
-                       letter-spacing:0.08em; margin-bottom:16px;">
-                    Automated Analysis
-                  </div>
-                  <div style="display:flex; gap:36px; flex-wrap:wrap; align-items:flex-end;">
-                    <div>
-                      <div style="font-size:0.7rem; color:var(--text-muted);
-                           text-transform:uppercase; letter-spacing:0.08em;
-                           margin-bottom:4px;">Current Price</div>
-                      <div style="font-family:'JetBrains Mono',monospace;
-                           font-size:1.4rem; font-weight:600;
-                           color:var(--accent-cyan);">${_price_val:.2f}</div>
-                    </div>
-                    <div>
-                      <div style="font-size:0.7rem; color:var(--text-muted);
-                           text-transform:uppercase; letter-spacing:0.08em;
-                           margin-bottom:6px;">Trend</div>
-                      <span class="badge {_trend_cls}">{_trend}</span>
-                    </div>
-                    <div>
-                      <div style="font-size:0.7rem; color:var(--text-muted);
-                           text-transform:uppercase; letter-spacing:0.08em;
-                           margin-bottom:4px;">Annualized Volatility</div>
-                      <div style="font-family:'JetBrains Mono',monospace;
-                           font-size:1.1rem; font-weight:600;
-                           color:var(--text-primary);">{_vol:.2%}</div>
-                    </div>
-                    <div>
-                      <div style="font-size:0.7rem; color:var(--text-muted);
-                           text-transform:uppercase; letter-spacing:0.08em;
-                           margin-bottom:6px;">Risk Level</div>
-                      <span class="badge {_risk_cls}">{_risk}</span>
-                    </div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+        _cache_set(cache_key, df.reset_index().to_dict(orient="list"))
+        return df, False
 
-        metrics = calculate_basic_risk_metrics(ticker)
-        if metrics:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("📉 Volatility",   f"{metrics['Volatility']:.2%}")
-            col2.metric("📐 Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}")
-            col3.metric("🕳️ Max Drawdown", f"{metrics['Max Drawdown']:.2%}")
+    except Exception:
+        # Fall back to cache even if stale
+        if cached:
+            df = pd.DataFrame(cached)
+            if "Date" in df.columns:
+                df["Date"] = pd.to_datetime(df["Date"])
+                df = df.set_index("Date")
+            return df, True
+        return pd.DataFrame(), False
 
-            metrics_df = pd.DataFrame([{
-                "Ticker":       ticker,
-                "Period":       period,
-                "Volatility":   f"{metrics['Volatility']:.2%}",
-                "Sharpe Ratio": f"{metrics['Sharpe Ratio']:.2f}",
-                "Max Drawdown": f"{metrics['Max Drawdown']:.2%}",
-            }])
-            metrics_csv = metrics_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Download Risk Metrics (CSV)",
-                data=metrics_csv,
-                file_name=f"{ticker}_metrics_{period}.csv",
-                mime="text/csv",
-                key="metrics_csv_tab1"
-            )
+
+def _get_ticker_info(ticker: str) -> dict:
+    cache_key = f"info:{ticker}"
+    cached = _cache_get(cache_key, _TTL_INFO)
+    if cached:
+        return cached
+    try:
+        kwargs = {"session": _SESSION} if _SESSION else {}
+        stock = yf.Ticker(ticker, **kwargs)
+        info = stock.info or {}
+        _cache_set(cache_key, info)
+        return info
+    except Exception:
+        return {}
+
 
 # ─────────────────────────────────────────
-# TAB 2 — Fundamentals
+# ANALYSIS FUNCTIONS
 # ─────────────────────────────────────────
 
-with tab2:
-    if not ticker:
-        st.info("👈 Select a stock from the sidebar first.")
-    else:
-        st.subheader(f"📈 Fundamental Data — {ticker}")
-        fund_data = get_fundamental_data(ticker)
-        if fund_data:
-            st.markdown(fund_data)
-        else:
-            st.warning("No fundamental data available for this ticker.")
+def get_stock_price_chart(ticker: str, period: str = "1y",
+                          start=None, end=None):
+    """Returns (plotly Figure, is_stale)."""
+    df, is_stale = fetch_price_data(ticker, period, start, end)
+    if df.empty:
+        return None, is_stale
 
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    required = {"Open", "High", "Low", "Close"}
+    if not required.issubset(df.columns):
+        return None, is_stale
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.75, 0.25]
+    )
+
+    # Candlestick
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["Open"], high=df["High"],
+        low=df["Low"],   close=df["Close"],
+        name="Price",
+        increasing_line_color="#00c6ff",
+        decreasing_line_color="#ff4d4d",
+    ), row=1, col=1)
+
+    # SMA 20 & 50
+    close = df["Close"].dropna()
+    if len(close) >= 20:
+        sma20 = close.rolling(20).mean()
+        fig.add_trace(go.Scatter(
+            x=df.index, y=sma20, name="SMA 20",
+            line=dict(color="#f5a623", width=1.5)
+        ), row=1, col=1)
+    if len(close) >= 50:
+        sma50 = close.rolling(50).mean()
+        fig.add_trace(go.Scatter(
+            x=df.index, y=sma50, name="SMA 50",
+            line=dict(color="#7f5af0", width=1.5)
+        ), row=1, col=1)
+
+    # Volume
+    if "Volume" in df.columns:
+        colors = [
+            "#00c6ff" if c >= o else "#ff4d4d"
+            for c, o in zip(df["Close"], df["Open"])
+        ]
+        fig.add_trace(go.Bar(
+            x=df.index, y=df["Volume"],
+            name="Volume", marker_color=colors, opacity=0.6
+        ), row=2, col=1)
+
+    fig.update_layout(
+        title=f"{ticker} — Price Chart",
+        xaxis_rangeslider_visible=False,
+        height=550,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
+    fig.update_yaxes(title_text="Volume",      row=2, col=1)
+
+    return fig, is_stale
+
+
+def get_fundamental_data(ticker: str) -> str:
+    """Returns a markdown-formatted string of key fundamentals."""
+    info = _get_ticker_info(ticker)
+    if not info:
+        return ""
+
+    def fmt(val, prefix="", suffix="", billions=False):
+        if val is None or val == "N/A":
+            return "N/A"
         try:
-            stock_obj = yf.Ticker(ticker, session=_SESSION)
-            info = stock_obj.info
+            if billions:
+                return f"{prefix}{float(val)/1e9:.2f}B{suffix}"
+            return f"{prefix}{float(val):.2f}{suffix}"
         except Exception:
-            info = {}
+            return str(val)
 
-        description = info.get("longBusinessSummary")
-        if description:
-            with st.expander("📋 About the Company"):
-                st.write(description)
+    rows = [
+        ("Company",        info.get("longName", ticker)),
+        ("Sector",         info.get("sector", "N/A")),
+        ("Industry",       info.get("industry", "N/A")),
+        ("Market Cap",     fmt(info.get("marketCap"), prefix="$", billions=True)),
+        ("P/E Ratio",      fmt(info.get("forwardPE"))),
+        ("EPS (TTM)",      fmt(info.get("trailingEps"), prefix="$")),
+        ("Revenue (TTM)",  fmt(info.get("totalRevenue"), prefix="$", billions=True)),
+        ("Gross Margin",   fmt(info.get("grossMargins"), suffix="%")),
+        ("52W High",       fmt(info.get("fiftyTwoWeekHigh"), prefix="$")),
+        ("52W Low",        fmt(info.get("fiftyTwoWeekLow"), prefix="$")),
+        ("Dividend Yield", fmt(info.get("dividendYield"), suffix="%")),
+        ("Beta",           fmt(info.get("beta"))),
+    ]
 
-        fund_keys = {
-            "Company":        info.get("longName", ticker),
-            "Sector":         info.get("sector", "N/A"),
-            "Market Cap":     info.get("marketCap", "N/A"),
-            "P/E Ratio":      info.get("forwardPE", "N/A"),
-            "EPS (TTM)":      info.get("trailingEps", "N/A"),
-            "52W High":       info.get("fiftyTwoWeekHigh", "N/A"),
-            "52W Low":        info.get("fiftyTwoWeekLow", "N/A"),
-            "Dividend Yield": info.get("dividendYield", "N/A"),
-        }
-        fund_df  = pd.DataFrame([fund_keys])
-        fund_csv = fund_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="⬇️ Download Fundamentals (CSV)",
-            data=fund_csv,
-            file_name=f"{ticker}_fundamentals.csv",
-            mime="text/csv",
-        )
+    lines = ["| Metric | Value |", "|--------|-------|"]
+    for label, val in rows:
+        lines.append(f"| {label} | {val} |")
+    return "\n".join(lines)
 
-# ─────────────────────────────────────────
-# TAB 3 — News
-# ─────────────────────────────────────────
 
-with tab3:
-    if not ticker:
-        st.info("👈 Select a stock from the sidebar first.")
+def get_company_info(ticker: str) -> str:
+    """Returns company name, sector, and description as plain text."""
+    info = _get_ticker_info(ticker)
+    name    = info.get("longName", ticker)
+    sector  = info.get("sector", "N/A")
+    desc    = info.get("longBusinessSummary", "No description available.")
+    return f"**{name}** | Sector: {sector}\n\n{desc}"
+
+
+def calculate_basic_risk_metrics(ticker: str, period: str = "1y") -> dict:
+    """Returns dict with Volatility, Sharpe Ratio, Max Drawdown."""
+    df, _ = fetch_price_data(ticker, period)
+    if df.empty:
+        return {}
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    if "Close" not in df.columns:
+        return {}
+
+    close   = df["Close"].dropna()
+    returns = close.pct_change().dropna()
+
+    if len(returns) < 10:
+        return {}
+
+    vol        = float(returns.std() * np.sqrt(252))
+    sharpe     = float((returns.mean() / returns.std()) * np.sqrt(252)) if returns.std() > 0 else 0.0
+    cum        = (1 + returns).cumprod()
+    roll_max   = cum.cummax()
+    drawdown   = (cum - roll_max) / roll_max
+    max_dd     = float(drawdown.min())
+
+    return {
+        "Volatility":   vol,
+        "Sharpe Ratio": sharpe,
+        "Max Drawdown": max_dd,
+    }
+
+
+def analyze_stock(ticker: str, period: str = "1y") -> str:
+    """Returns a plain-text summary of trend, volatility, and risk."""
+    df, _ = fetch_price_data(ticker, period)
+    if df.empty:
+        return f"Could not fetch data for {ticker}."
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    close   = df["Close"].dropna()
+    returns = close.pct_change().dropna()
+
+    price  = float(close.iloc[-1])
+    sma20  = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else price
+    sma50  = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else price
+    vol    = float(returns.std() * np.sqrt(252))
+
+    if price > sma20 > sma50:
+        trend = "Uptrend"
+    elif price < sma20 < sma50:
+        trend = "Downtrend"
     else:
-        st.subheader(f"📰 Latest News — {ticker}")
-        with st.spinner("Fetching latest news..."):
-            news = get_news(ticker)
-        st.markdown(news, unsafe_allow_html=True)
+        trend = "Sideways"
+
+    risk = "High" if vol > 0.4 else ("Medium" if vol > 0.25 else "Low")
+
+    return (
+        f"{ticker} is currently in a **{trend}**. "
+        f"Price: ${price:.2f} | SMA20: ${sma20:.2f} | SMA50: ${sma50:.2f}. "
+        f"Annualized volatility: {vol:.1%} ({risk} risk)."
+    )
+
 
 # ─────────────────────────────────────────
-# TAB 4 — AI Forecast
+# NEWS
 # ─────────────────────────────────────────
 
-with tab4:
-    if not ticker:
-        st.info("👈 Select a stock from the sidebar first.")
-    else:
-        st.subheader(f"🤖 14-Day AI Price Forecast — {ticker}")
-        st.caption("Powered by Linear Regression with moving average features — trained on 2 years of historical data.")
+def get_news(ticker: str) -> str:
+    """Fetches latest news via GNews. Returns HTML string."""
+    try:
+        from gnews import GNews
+        gn = GNews(language="en", country="US", max_results=8)
+        articles = gn.get_news(ticker)
+        if not articles:
+            return "<p>No recent news found.</p>"
 
-        with st.spinner("Running forecast model... this may take ~30 seconds ⏳"):
-            try:
-                forecast_fig = get_price_forecast(ticker)
-            except Exception as e:
-                forecast_fig = None
-                st.error(f"Forecast error: {str(e)}")
-
-        if forecast_fig and not isinstance(forecast_fig, str):
-            forecast_fig.update_layout(template="plotly_dark")
-            st.plotly_chart(forecast_fig, use_container_width=True)
-            st.warning(
-                "⚠️ **Disclaimer:** This forecast is generated by a Linear Regression model. "
-                "It is NOT financial advice. Past patterns do not guarantee future results."
+        html = ""
+        for a in articles:
+            title     = a.get("title", "No title")
+            url       = a.get("url", "#")
+            publisher = a.get("publisher", {}).get("title", "")
+            date      = a.get("published date", "")
+            html += (
+                f'<div style="margin-bottom:16px; padding:12px; '
+                f'border-left:3px solid #00c6ff; background:#1c2331; border-radius:4px;">'
+                f'<a href="{url}" target="_blank" style="color:#00c6ff; '
+                f'font-weight:600; text-decoration:none;">{title}</a><br>'
+                f'<small style="color:#8b949e;">{publisher} — {date}</small>'
+                f'</div>'
             )
-        else:
-            st.warning("Forecast unavailable. yfinance may be rate-limiting on this server.")
+        return html
+    except Exception as e:
+        return f"<p>News unavailable: {e}</p>"
+
 
 # ─────────────────────────────────────────
-# TAB 5 — Backtest
+# FORECASTING — Linear Regression
 # ─────────────────────────────────────────
 
-with tab5:
-    if not ticker:
-        st.info("👈 Select a stock from the sidebar first.")
-    else:
-        st.subheader(f"📉 MA Crossover Backtest — {ticker}")
-        st.caption("Adjust the moving average windows — the chart updates live.")
+def get_price_forecast(ticker: str) -> object:
+    """
+    14-day price forecast using Linear Regression with MA features.
+    Returns a Plotly figure or None on failure.
+    """
+    try:
+        from sklearn.linear_model import LinearRegression
 
-        col_s, col_l = st.columns(2)
-        with col_s:
-            short_win = st.slider("Short MA window (days)", min_value=5, max_value=50, value=20, step=1)
-        with col_l:
-            long_win = st.slider("Long MA window (days)", min_value=20, max_value=200, value=50, step=5)
+        df, _ = fetch_price_data(ticker, period="2y")
+        if df.empty:
+            return None
 
-        if short_win >= long_win:
-            st.warning("⚠️ Short window must be smaller than Long window.")
-        else:
-            df_bt = ma_crossover_backtest(ticker, short_window=short_win, long_window=long_win, period=period)
-            if df_bt is not None:
-                fig_equity = go.Figure()
-                fig_equity.add_trace(go.Scatter(
-                    x=df_bt.index, y=df_bt["Cumulative_Market"],
-                    mode="lines", name="Buy & Hold", line=dict(color="#00c6ff"),
-                    hovertemplate="<b>Date:</b> %{x}<br><b>Value:</b> %{y:.2f}<extra></extra>"
-                ))
-                fig_equity.add_trace(go.Scatter(
-                    x=df_bt.index, y=df_bt["Cumulative_Strategy"],
-                    mode="lines", name=f"MA {short_win}/{long_win} Strategy",
-                    line=dict(color="#7f5af0"),
-                    hovertemplate="<b>Date:</b> %{x}<br><b>Value:</b> %{y:.2f}<extra></extra>"
-                ))
-                fig_equity.update_layout(
-                    template="plotly_dark",
-                    title=f"MA {short_win}/{long_win} Strategy vs Buy & Hold",
-                    yaxis_title="Portfolio Value (starting at 1.0)",
-                    hovermode="x unified",
-                    hoverlabel=dict(bgcolor="#1c2331", font_size=14, font_color="white")
-                )
-                st.plotly_chart(fig_equity, use_container_width=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-                fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(
-                    x=df_bt.index, y=df_bt["Drawdown"],
-                    mode="lines", fill="tozeroy",
-                    name="Drawdown", line=dict(color="#ff4d4d"),
-                ))
-                fig_dd.update_layout(
-                    template="plotly_dark", title="Strategy Drawdown",
-                    yaxis_title="Drawdown", yaxis_tickformat=".0%",
-                )
-                st.plotly_chart(fig_dd, use_container_width=True)
+        close = df["Close"].dropna().reset_index(drop=True)
+        if len(close) < 60:
+            return None
 
-                if len(df_bt) > 0:
-                    final_market   = df_bt["Cumulative_Market"].iloc[-1]
-                    final_strategy = df_bt["Cumulative_Strategy"].iloc[-1]
-                    max_dd         = df_bt["Drawdown"].min()
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("📈 Buy & Hold Return", f"{(final_market - 1) * 100:.2f}%")
-                    col2.metric("🧠 Strategy Return",   f"{(final_strategy - 1) * 100:.2f}%")
-                    col3.metric("🕳️ Max Drawdown",      f"{max_dd * 100:.2f}%")
+        # Features: MA5, MA10, MA20, lag1, lag2
+        data = pd.DataFrame({"close": close})
+        data["ma5"]  = data["close"].rolling(5).mean()
+        data["ma10"] = data["close"].rolling(10).mean()
+        data["ma20"] = data["close"].rolling(20).mean()
+        data["lag1"] = data["close"].shift(1)
+        data["lag2"] = data["close"].shift(2)
+        data = data.dropna()
 
-                    bt_export          = df_bt[["Cumulative_Market", "Cumulative_Strategy", "Drawdown"]].copy()
-                    bt_export.columns  = ["Buy & Hold", "MA Strategy", "Drawdown"]
-                    bt_csv = bt_export.reset_index().to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        label="⬇️ Download Backtest Results (CSV)",
-                        data=bt_csv,
-                        file_name=f"{ticker}_backtest_{short_win}_{long_win}.csv",
-                        mime="text/csv",
-                    )
-            else:
-                st.warning("Not enough data to run backtest for this ticker.")
+        X = data[["ma5", "ma10", "ma20", "lag1", "lag2"]].values
+        y = data["close"].values
 
-# ─────────────────────────────────────────
-# TAB 6 — AI Chat
-# ─────────────────────────────────────────
+        model = LinearRegression()
+        model.fit(X, y)
 
-with tab6:
-    st.subheader("💬 AI Financial Analyst Chat")
-    st.caption("Powered by LLaMA 3.3 70B via Groq. Ask anything about any stock.")
+        # Forecast 14 days ahead iteratively
+        last_close = list(close.iloc[-20:])
+        forecast_prices = []
 
-    from core.agent import create_agent_executor
+        for _ in range(14):
+            s = pd.Series(last_close)
+            ma5  = float(s.rolling(5).mean().iloc[-1])
+            ma10 = float(s.rolling(10).mean().iloc[-1])
+            ma20 = float(s.rolling(20).mean().iloc[-1])
+            lag1 = last_close[-1]
+            lag2 = last_close[-2]
+            pred = model.predict([[ma5, ma10, ma20, lag1, lag2]])[0]
+            forecast_prices.append(pred)
+            last_close.append(pred)
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+        last_date      = df.index[-1]
+        forecast_dates = pd.bdate_range(start=last_date, periods=15)[1:]
 
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        hist_tail = df["Close"].iloc[-60:]
 
-    user_input = st.chat_input("Ask about any stock — e.g. 'Analyze AAPL' or 'What is the risk of TSLA?'")
-
-    if user_input:
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    agent = create_agent_executor()
-                    response = agent.invoke({"input": user_input})
-                    answer = response.get("output", "Sorry, I couldn't generate a response.")
-                except Exception as e:
-                    answer = f"⚠️ Agent error: {str(e)}"
-            st.markdown(answer)
-            st.session_state.chat_history.append({"role": "assistant", "content": answer})
-
-    if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat"):
-            st.session_state.chat_history = []
-            st.rerun()
-
-# ─────────────────────────────────────────
-# TAB 7 — Portfolio Tracker
-# ─────────────────────────────────────────
-
-with tab7:
-    st.subheader("📂 Portfolio Tracker")
-    st.caption("Add multiple stocks and compare their performance side by side.")
-
-    if "portfolio" not in st.session_state:
-        st.session_state.portfolio = []
-
-    col_input, col_btn, col_period = st.columns([2, 1, 1])
-    with col_input:
-        new_ticker = st.text_input(
-            "ticker_input",
-            placeholder="e.g. AAPL, TSLA, RELIANCE.NS",
-            label_visibility="collapsed"
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=hist_tail.index, y=hist_tail.values,
+            mode="lines", name="Historical",
+            line=dict(color="#00c6ff", width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=forecast_dates, y=forecast_prices,
+            mode="lines+markers", name="Forecast",
+            line=dict(color="#f5a623", width=2, dash="dash"),
+            marker=dict(size=5)
+        ))
+        fig.update_layout(
+            title=f"{ticker} — 14-Day Price Forecast (Linear Regression)",
+            xaxis_title="Date",
+            yaxis_title="Price (USD)",
+            height=450,
         )
-    with col_btn:
-        add_clicked = st.button("➕ Add Stock", use_container_width=True)
-    with col_period:
-        portfolio_period = st.selectbox(
-            "Period", ["1mo", "3mo", "6mo", "1y", "2y"],
-            index=3, key="portfolio_period"
-        )
+        return fig
 
-    if add_clicked:
-        cleaned = new_ticker.strip().upper()
-        if cleaned == "":
-            st.warning("Please enter a ticker symbol.")
-        elif cleaned in st.session_state.portfolio:
-            st.warning(f"{cleaned} is already in your portfolio.")
-        elif len(st.session_state.portfolio) >= 8:
-            st.warning("Maximum 8 stocks allowed for a clean comparison.")
-        else:
-            try:
-                test = yf.download(cleaned, period="5d", progress=False, session=_SESSION)
-            except Exception:
-                test = pd.DataFrame()
+    except Exception:
+        return None
 
-            if test.empty:
-                st.error(f"Could not find data for '{cleaned}'. Check the ticker symbol.")
-            else:
-                st.session_state.portfolio.append(cleaned)
-                st.rerun()
-
-    if st.session_state.portfolio:
-        st.markdown("**Your portfolio:**")
-        chip_cols = st.columns(len(st.session_state.portfolio) + 1)
-        for i, t in enumerate(st.session_state.portfolio):
-            with chip_cols[i]:
-                if st.button(f"❌ {t}", key=f"remove_{t}", use_container_width=True):
-                    st.session_state.portfolio.remove(t)
-                    st.rerun()
-        with chip_cols[-1]:
-            if st.button("🗑️ Clear All", use_container_width=True):
-                st.session_state.portfolio = []
-                st.rerun()
-
-        st.divider()
-
-        @st.cache_data(ttl=300)
-        def fetch_normalized(tickers: tuple, period: str):
-            result = {}
-            for t in tickers:
-                try:
-                    df = yf.download(t, period=period, progress=False, session=_SESSION)
-                except Exception:
-                    continue
-                if df.empty:
-                    continue
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                close = df["Close"].dropna()
-                if len(close) == 0:
-                    continue
-                result[t] = (close / close.iloc[0]) * 100
-            return pd.DataFrame(result)
-
-        with st.spinner("Fetching portfolio data..."):
-            norm_df = fetch_normalized(tuple(st.session_state.portfolio), portfolio_period)
-
-        if norm_df.empty:
-            st.error("Could not fetch data for any of the selected stocks.")
-        else:
-            colors = ["#00c6ff", "#7f5af0", "#ff6b6b", "#ffd93d",
-                      "#6bcb77", "#ff922b", "#cc5de8", "#20c997"]
-
-            fig_port = go.Figure()
-            for i, col in enumerate(norm_df.columns):
-                fig_port.add_trace(go.Scatter(
-                    x=norm_df.index, y=norm_df[col],
-                    mode="lines", name=col,
-                    line=dict(color=colors[i % len(colors)], width=2),
-                    hovertemplate=f"<b>{col}</b><br>Date: %{{x}}<br>Value: %{{y:.1f}}<extra></extra>"
-                ))
-            fig_port.update_layout(
-                template="plotly_dark",
-                title=f"Normalized Performance (base = 100) — {portfolio_period}",
-                yaxis_title="Normalized Price (start = 100)",
-                hovermode="x unified",
-                hoverlabel=dict(bgcolor="#1c2331", font_size=13, font_color="white"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=500,
-            )
-            st.plotly_chart(fig_port, use_container_width=True)
-
-            st.subheader("📊 Side-by-Side Metrics")
-            metrics_rows = []
-            for t in st.session_state.portfolio:
-                m = calculate_basic_risk_metrics(t, period=portfolio_period)
-                if m:
-                    total_return = norm_df[t].iloc[-1] - 100 if t in norm_df.columns else None
-                    metrics_rows.append({
-                        "Ticker":       t,
-                        "Return (%)":   f"{total_return:.2f}%" if total_return is not None else "N/A",
-                        "Volatility":   f"{m['Volatility']:.2%}",
-                        "Sharpe Ratio": f"{m['Sharpe Ratio']:.2f}",
-                        "Max Drawdown": f"{m['Max Drawdown']:.2%}",
-                    })
-
-            if metrics_rows:
-                st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
-
-            if len(norm_df.columns) >= 2:
-                st.subheader("🔗 Correlation Matrix")
-                st.caption(
-                    "1.0 = move together | 0 = no relation | -1.0 = move opposite. "
-                    "Lower correlations = better diversification."
-                )
-                corr = norm_df.pct_change().dropna().corr()
-                fig_corr = go.Figure(data=go.Heatmap(
-                    z=corr.values,
-                    x=corr.columns.tolist(),
-                    y=corr.index.tolist(),
-                    colorscale="RdBu", zmid=0, zmin=-1, zmax=1,
-                    text=[[f"{v:.2f}" for v in row] for row in corr.values],
-                    texttemplate="%{text}",
-                    hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{z:.2f}<extra></extra>",
-                ))
-                fig_corr.update_layout(
-                    template="plotly_dark",
-                    title="Return Correlation Between Stocks",
-                    height=400,
-                )
-                st.plotly_chart(fig_corr, use_container_width=True)
-
-            st.subheader("💾 Export Portfolio")
-            csv_data = norm_df.reset_index().to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Download Portfolio Data (CSV)",
-                data=csv_data,
-                file_name=f"portfolio_{portfolio_period}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-    else:
-        st.info(
-            "👆 Type a ticker above and click ➕ Add Stock. "
-            "Try starting with AAPL, TSLA, GOOGL to see the comparison!"
-        )
 
 # ─────────────────────────────────────────
-# TAB 8 — Export
+# BACKTESTING
 # ─────────────────────────────────────────
 
-with tab8:
-    st.subheader("📤 Export Center")
-    st.caption("Generate and download reports for any stock.")
+def ma_crossover_backtest(ticker: str, short_window: int = 20,
+                          long_window: int = 50, period: str = "1y"):
+    """
+    MA crossover strategy backtest.
+    Returns DataFrame with Cumulative_Market, Cumulative_Strategy, Drawdown.
+    """
+    df, _ = fetch_price_data(ticker, period)
+    if df.empty:
+        return None
 
-    if not ticker:
-        st.info("👈 Select a stock from the sidebar first, then come here to export.")
-    else:
-        st.markdown(f"### Currently selected: `{ticker}` — Period: `{period}`")
-        st.divider()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-        st.markdown("#### 📄 Full PDF Report")
-        st.markdown(
-            "Includes: stock name & price, risk metrics table, "
-            "automated analysis summary, and price chart image."
-        )
-        if st.button("🖨️ Generate PDF Report", use_container_width=True):
-            with st.spinner("Building your PDF report... this takes ~10 seconds ⏳"):
-                try:
-                    pdf_bytes = generate_pdf(ticker, period)
-                    st.success("✅ PDF ready! Click below to download.")
-                    st.download_button(
-                        label=f"⬇️ Download {ticker} Report (PDF)",
-                        data=pdf_bytes,
-                        file_name=f"{ticker}_report_{period}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
-                except Exception as e:
-                    st.error(f"PDF generation failed: {str(e)}")
+    if "Close" not in df.columns:
+        return None
 
-        st.divider()
+    close = df["Close"].dropna()
+    if len(close) < long_window + 10:
+        return None
 
-        st.markdown("#### 📊 CSV Data Exports")
-        col1, col2 = st.columns(2)
+    bt = pd.DataFrame(index=close.index)
+    bt["Close"]     = close
+    bt["SMA_short"] = close.rolling(short_window).mean()
+    bt["SMA_long"]  = close.rolling(long_window).mean()
+    bt = bt.dropna()
 
-        with col1:
-            st.markdown("**Price History**")
-            raw_df, _ = fetch_price_data(ticker, period, start_date, end_date)
-            if not raw_df.empty:
-                if isinstance(raw_df.columns, pd.MultiIndex):
-                    raw_df.columns = raw_df.columns.get_level_values(0)
-                price_csv = raw_df.reset_index().to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="⬇️ Price Data (CSV)",
-                    data=price_csv,
-                    file_name=f"{ticker}_price_{period}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="price_csv_export"
-                )
+    bt["Signal"]   = (bt["SMA_short"] > bt["SMA_long"]).astype(int)
+    bt["Position"] = bt["Signal"].shift(1).fillna(0)
+    bt["Returns"]  = bt["Close"].pct_change().fillna(0)
 
-        with col2:
-            st.markdown("**Risk Metrics**")
-            metrics = calculate_basic_risk_metrics(ticker, period)
-            if metrics:
-                metrics_df = pd.DataFrame([{
-                    "Ticker":       ticker,
-                    "Period":       period,
-                    "Volatility":   f"{metrics['Volatility']:.2%}",
-                    "Sharpe Ratio": f"{metrics['Sharpe Ratio']:.2f}",
-                    "Max Drawdown": f"{metrics['Max Drawdown']:.2%}",
-                }])
-                metrics_csv = metrics_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="⬇️ Risk Metrics (CSV)",
-                    data=metrics_csv,
-                    file_name=f"{ticker}_metrics_{period}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="metrics_csv_export"
-                )
+    bt["Strategy_Returns"]    = bt["Position"] * bt["Returns"]
+    bt["Cumulative_Market"]   = (1 + bt["Returns"]).cumprod()
+    bt["Cumulative_Strategy"] = (1 + bt["Strategy_Returns"]).cumprod()
+
+    roll_max      = bt["Cumulative_Strategy"].cummax()
+    bt["Drawdown"] = (bt["Cumulative_Strategy"] - roll_max) / roll_max
+
+    return bt
+
+
+# ─────────────────────────────────────────
+# PDF EXPORT
+# ─────────────────────────────────────────
+
+def generate_pdf(ticker: str, period: str = "1y") -> bytes:
+    """
+    Generates a PDF report for the given ticker.
+    Returns raw bytes.
+    """
+    try:
+        from fpdf import FPDF
+        import tempfile
+
+        metrics = calculate_basic_risk_metrics(ticker, period)
+        info    = _get_ticker_info(ticker)
+        name    = info.get("longName", ticker)
+        sector  = info.get("sector", "N/A")
+        summary = analyze_stock(ticker, period)
+
+        # Try to generate and save chart image
+        chart_path = None
+        try:
+            import plotly.io as pio
+            fig, _ = get_stock_price_chart(ticker, period)
+            if fig:
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                pio.write_image(fig, tmp.name, width=900, height=400)
+                chart_path = tmp.name
+        except Exception:
+            pass
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+
+        # Title
+        pdf.set_font("Helvetica", "B", 20)
+        pdf.cell(0, 12, f"AI Financial Analyst — {ticker}", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.cell(0, 8, f"{name} | Sector: {sector} | Period: {period}", ln=True)
+        pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
+        pdf.ln(4)
+
+        # Risk metrics table
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 10, "Risk Metrics", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+
+        if metrics:
+            for label, val in [
+                ("Volatility",   f"{metrics['Volatility']:.2%}"),
+                ("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}"),
+                ("Max Drawdown", f"{metrics['Max Drawdown']:.2%}"),
+            ]:
+                pdf.cell(60, 8, label, border=1)
+                pdf.cell(60, 8, val,   border=1, ln=True)
+        else:
+            pdf.cell(0, 8, "Metrics unavailable.", ln=True)
+
+        pdf.ln(4)
+
+        # Analysis summary
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 10, "Automated Analysis", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        # Strip markdown bold markers for plain PDF text
+        plain_summary = summary.replace("**", "")
+        pdf.multi_cell(0, 7, plain_summary)
+        pdf.ln(4)
+
+        # Chart image
+        if chart_path and os.path.exists(chart_path):
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.cell(0, 10, "Price Chart", ln=True)
+            pdf.image(chart_path, w=180)
+            os.unlink(chart_path)
+
+        return bytes(pdf.output())
+
+    except Exception as e:
+        raise RuntimeError(f"PDF generation failed: {e}\n{traceback.format_exc()}")

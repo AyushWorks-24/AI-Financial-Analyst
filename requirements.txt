@@ -1,35 +1,17 @@
-# AI Financial Analyst — Stable Dependencies
-
-# Data fetching
+streamlit>=1.40.0
 yfinance>=0.2.61
-curl_cffi>=0.7.0
-gnews==0.4.3
+curl_cffi>=0.6.0
+plotly>=5.18.0
+pandas>=2.0.0
+numpy>=1.26.0
+scikit-learn>=1.3.0
 
-# Data processing
-numpy==1.26.4
-pandas==2.2.3
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-groq>=0.1.0
+langgraph>=0.1.0
 
-# Machine Learning
-scikit-learn==1.5.2
-
-# Charts
-plotly==5.24.1
-kaleido==0.2.1
-
-# AI Agent (LOCKED versions)
-langchain-core==0.3.51
-langchain-groq==0.3.2
-langgraph==0.3.21
-langgraph-checkpoint==2.0.10
-langgraph-prebuilt==0.1.8
-
-# Search
-rapidfuzz==3.10.1
-
-# PDF Export
-fpdf2==2.8.1
-
-# Utility
-requests==2.32.3
-python-dotenv==1.0.1
-tqdm==4.66.5
+gnews>=0.3.7
+rapidfuzz>=3.6.0
+fpdf2>=2.7.0
+kaleido>=0.2.1
