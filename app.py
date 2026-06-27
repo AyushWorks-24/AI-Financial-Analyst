@@ -11,6 +11,7 @@ from rapidfuzz import fuzz, process
 from core.engine import (
     _SESSION,
     _cache_stats,
+    _get_ticker_info,
     calculate_basic_risk_metrics,
     clear_cache,
     fetch_price_data,
@@ -22,6 +23,7 @@ from core.engine import (
     ma_crossover_backtest,
     analyze_stock,
 )
+from core.agent import create_agent_executor
 
 st.set_page_config(
     page_title="AI Financial Analyst",
@@ -124,6 +126,7 @@ else:
 # ─────────────────────────────────────────
 
 if ticker:
+    # Uses _SESSION via fetch_ticker_history in engine — no raw yf calls here
     try:
         kwargs = {"session": _SESSION} if _SESSION else {}
         stock  = yf.Ticker(ticker, **kwargs)
@@ -198,14 +201,14 @@ with tab1:
         else:
             st.warning("Could not load price chart.")
 
-        # Automated analysis card
-        _df2, _ = fetch_price_data(ticker, period="1y")
+        # Automated analysis card — uses selected period, not hardcoded 1y
+        _df2, _ = fetch_price_data(ticker, period)
         if _df2 is not None and not _df2.empty:
             if isinstance(_df2.columns, pd.MultiIndex):
                 _df2.columns = _df2.columns.get_level_values(0)
             if "Close" in _df2.columns and len(_df2) >= 50:
-                _close = _df2["Close"].dropna()
-                _returns = _close.pct_change().dropna()
+                _close    = _df2["Close"].dropna()
+                _returns  = _close.pct_change().dropna()
                 _price_val = float(_close.iloc[-1])
                 _sma20     = float(_close.rolling(20).mean().iloc[-1])
                 _sma50     = float(_close.rolling(50).mean().iloc[-1])
@@ -218,8 +221,8 @@ with tab1:
                 else:
                     _trend, _tc = "Sideways", "purple"
 
-                _risk    = "High" if _vol > 0.4 else ("Medium" if _vol > 0.25 else "Low")
-                _rc      = "red" if _risk == "High" else ("cyan" if _risk == "Medium" else "green")
+                _risk = "High" if _vol > 0.4 else ("Medium" if _vol > 0.25 else "Low")
+                _rc   = "red" if _risk == "High" else ("cyan" if _risk == "Medium" else "green")
 
                 st.markdown(f"""
                 <div class="section-card">
@@ -286,12 +289,9 @@ with tab2:
         else:
             st.warning("No fundamental data available.")
 
-        try:
-            kwargs    = {"session": _SESSION} if _SESSION else {}
-            stock_obj = yf.Ticker(ticker, **kwargs)
-            info      = stock_obj.info
-        except Exception:
-            info = {}
+        # FIX: use _get_ticker_info instead of raw yf.Ticker — routes through
+        # _SESSION and SQLite cache, avoids Yahoo rate-limiting on Render
+        info = _get_ticker_info(ticker)
 
         desc = info.get("longBusinessSummary")
         if desc:
@@ -424,8 +424,6 @@ with tab6:
     st.subheader("💬 AI Financial Analyst Chat")
     st.caption("Powered by LLaMA 3.3 70B via Groq.")
 
-    from core.agent import create_agent_executor
-
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -485,11 +483,9 @@ with tab7:
         elif len(st.session_state.portfolio) >= 8:
             st.warning("Maximum 8 stocks.")
         else:
-            try:
-                kwargs = {"session": _SESSION} if _SESSION else {}
-                test   = yf.download(cleaned, period="5d", progress=False, **kwargs)
-            except Exception:
-                test = pd.DataFrame()
+            # FIX: use fetch_price_data instead of raw yf.download
+            # routes through _SESSION and SQLite cache
+            test, _ = fetch_price_data(cleaned, period="5d")
             if test.empty:
                 st.error(f"Could not find data for '{cleaned}'.")
             else:
@@ -514,11 +510,9 @@ with tab7:
         def fetch_normalized(tickers: tuple, per: str):
             result = {}
             for t in tickers:
-                try:
-                    kwargs = {"session": _SESSION} if _SESSION else {}
-                    df = yf.download(t, period=per, progress=False, **kwargs)
-                except Exception:
-                    continue
+                # FIX: use fetch_price_data instead of raw yf.download
+                # routes through _SESSION and SQLite cache
+                df, _ = fetch_price_data(t, period=per)
                 if df.empty:
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
