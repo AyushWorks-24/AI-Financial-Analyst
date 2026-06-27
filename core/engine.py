@@ -23,7 +23,10 @@ from plotly.subplots import make_subplots
 try:
     from curl_cffi import requests as cffi_requests
     _SESSION = cffi_requests.Session(impersonate="chrome")
-except Exception:
+except Exception as e:
+    print(f"[engine] WARNING: curl_cffi unavailable ({e}). "
+          "yfinance will run without Chrome impersonation — "
+          "Yahoo Finance may rate-limit on cloud IPs.")
     _SESSION = None
 
 import yfinance as yf
@@ -60,8 +63,8 @@ def _cache_get(key: str, ttl: int):
         conn.close()
         if row and (time.time() - row[1]) < ttl:
             return json.loads(row[0])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[cache] _cache_get failed for key={key}: {e}")
     return None
 
 
@@ -74,8 +77,8 @@ def _cache_set(key: str, value):
         )
         conn.commit()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[cache] _cache_set failed for key={key}: {e}")
 
 
 def _cache_stats():
@@ -89,7 +92,8 @@ def _cache_stats():
             if row[1] else "—"
         )
         return {"total": total, "oldest": oldest}
-    except Exception:
+    except Exception as e:
+        print(f"[cache] _cache_stats failed: {e}")
         return {"total": 0, "oldest": "—"}
 
 
@@ -100,7 +104,8 @@ def clear_cache():
         conn.commit()
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[cache] clear_cache failed: {e}")
         return False
 
 
@@ -161,8 +166,34 @@ def _get_ticker_info(ticker: str) -> dict:
         info = stock.info or {}
         _cache_set(cache_key, info)
         return info
-    except Exception:
+    except Exception as e:
+        print(f"[engine] _get_ticker_info failed for {ticker}: {e}")
         return {}
+
+
+def fetch_ticker_history(ticker: str, period: str = "2d") -> pd.DataFrame:
+    """
+    Fetches recent price history using _SESSION for Chrome impersonation.
+    Used by app.py for the live price header and portfolio tab.
+    """
+    cache_key = f"hist:{ticker}:{period}"
+    cached = _cache_get(cache_key, _TTL_PRICE)
+    if cached:
+        df = pd.DataFrame(cached)
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"])
+            df = df.set_index("Date")
+        return df
+    try:
+        kwargs = {"session": _SESSION} if _SESSION else {}
+        stock = yf.Ticker(ticker, **kwargs)
+        hist = stock.history(period=period)
+        if not hist.empty:
+            _cache_set(cache_key, hist.reset_index().to_dict(orient="list"))
+        return hist
+    except Exception as e:
+        print(f"[engine] fetch_ticker_history failed for {ticker}: {e}")
+        return pd.DataFrame()
 
 
 # ─────────────────────────────────────────
@@ -245,12 +276,18 @@ def get_fundamental_data(ticker: str) -> str:
     if not info:
         return ""
 
-    def fmt(val, prefix="", suffix="", billions=False):
+    def fmt(val, prefix="", suffix="", billions=False, is_pct=False):
+        """
+        is_pct=True: val is already a 0–1 decimal from yfinance (e.g. 0.42).
+        Multiply by 100 before displaying as a percentage.
+        """
         if val is None or val == "N/A":
             return "N/A"
         try:
             if billions:
                 return f"{prefix}{float(val)/1e9:.2f}B{suffix}"
+            if is_pct:
+                return f"{prefix}{float(val)*100:.2f}{suffix}"
             return f"{prefix}{float(val):.2f}{suffix}"
         except Exception:
             return str(val)
@@ -263,10 +300,11 @@ def get_fundamental_data(ticker: str) -> str:
         ("P/E Ratio",      fmt(info.get("forwardPE"))),
         ("EPS (TTM)",      fmt(info.get("trailingEps"), prefix="$")),
         ("Revenue (TTM)",  fmt(info.get("totalRevenue"), prefix="$", billions=True)),
-        ("Gross Margin",   fmt(info.get("grossMargins"), suffix="%")),
+        # FIX: grossMargins and dividendYield are 0-1 decimals — use is_pct=True
+        ("Gross Margin",   fmt(info.get("grossMargins"), suffix="%", is_pct=True)),
         ("52W High",       fmt(info.get("fiftyTwoWeekHigh"), prefix="$")),
         ("52W Low",        fmt(info.get("fiftyTwoWeekLow"), prefix="$")),
-        ("Dividend Yield", fmt(info.get("dividendYield"), suffix="%")),
+        ("Dividend Yield", fmt(info.get("dividendYield"), suffix="%", is_pct=True)),
         ("Beta",           fmt(info.get("beta"))),
     ]
 
@@ -414,6 +452,9 @@ def get_price_forecast(ticker: str) -> object:
         data["lag2"] = data["close"].shift(2)
         data = data.dropna()
 
+        if len(data) < 30:
+            return None
+
         X = data[["ma5", "ma10", "ma20", "lag1", "lag2"]].values
         y = data["close"].values
 
@@ -528,27 +569,34 @@ def generate_pdf(ticker: str, period: str = "1y") -> bytes:
         summary = analyze_stock(ticker, period)
 
         # Try to generate and save chart image
+        # On Windows, NamedTemporaryFile must be closed before other processes
+        # can write to it. Close immediately, then pass path to write_image.
         chart_path = None
         try:
             import plotly.io as pio
             fig, _ = get_stock_price_chart(ticker, period)
             if fig:
                 tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                tmp.close()  # release file handle before pio writes to it
                 pio.write_image(fig, tmp.name, width=900, height=400)
                 chart_path = tmp.name
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[pdf] Chart image generation failed (kaleido required): {e}")
 
         pdf = FPDF()
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)
 
         # Title
+        # Note: Helvetica is latin-1 only — strip or replace any non-latin-1 chars
+        def safe(text: str) -> str:
+            return text.encode("latin-1", errors="replace").decode("latin-1")
+
         pdf.set_font("Helvetica", "B", 20)
-        pdf.cell(0, 12, f"AI Financial Analyst — {ticker}", ln=True)
+        pdf.cell(0, 12, safe(f"AI Financial Analyst - {ticker}"), ln=True)
         pdf.set_font("Helvetica", "", 11)
-        pdf.cell(0, 8, f"{name} | Sector: {sector} | Period: {period}", ln=True)
-        pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
+        pdf.cell(0, 8, safe(f"{name} | Sector: {sector} | Period: {period}"), ln=True)
+        pdf.cell(0, 8, safe(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"), ln=True)
         pdf.ln(4)
 
         # Risk metrics table
@@ -562,8 +610,8 @@ def generate_pdf(ticker: str, period: str = "1y") -> bytes:
                 ("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}"),
                 ("Max Drawdown", f"{metrics['Max Drawdown']:.2%}"),
             ]:
-                pdf.cell(60, 8, label, border=1)
-                pdf.cell(60, 8, val,   border=1, ln=True)
+                pdf.cell(60, 8, safe(label), border=1)
+                pdf.cell(60, 8, safe(val),   border=1, ln=True)
         else:
             pdf.cell(0, 8, "Metrics unavailable.", ln=True)
 
@@ -573,8 +621,8 @@ def generate_pdf(ticker: str, period: str = "1y") -> bytes:
         pdf.set_font("Helvetica", "B", 13)
         pdf.cell(0, 10, "Automated Analysis", ln=True)
         pdf.set_font("Helvetica", "", 10)
-        # Strip markdown bold markers for plain PDF text
-        plain_summary = summary.replace("**", "")
+        # Strip markdown bold markers and sanitize for latin-1
+        plain_summary = safe(summary.replace("**", ""))
         pdf.multi_cell(0, 7, plain_summary)
         pdf.ln(4)
 
@@ -583,7 +631,13 @@ def generate_pdf(ticker: str, period: str = "1y") -> bytes:
             pdf.set_font("Helvetica", "B", 13)
             pdf.cell(0, 10, "Price Chart", ln=True)
             pdf.image(chart_path, w=180)
-            os.unlink(chart_path)
+            try:
+                os.unlink(chart_path)
+            except Exception as e:
+                print(f"[pdf] Could not delete temp file {chart_path}: {e}")
+        else:
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.cell(0, 8, "Chart image unavailable.", ln=True)
 
         return bytes(pdf.output())
 
